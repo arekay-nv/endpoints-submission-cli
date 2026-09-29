@@ -202,8 +202,14 @@ submission root (§9.1).
 | `system-description-present` | §8.2 | Every point has a `system_desc.json` |
 | `system-description-valid` | §8.2 | It parses against the `SystemDescription` schema |
 | `system-description-consistency` | §8.5 | Every point of a curve describes the same system |
-| `model-name-valid` | §2 | `model_name` is one of the round's supported models |
-| `model-name-consistency` | §16 | It matches the results directory name |
+| `model-name-valid` | §3.2 | `point.yaml`'s `model_name` is one of the round's supported models |
+| `model-name-consistency` | §8.1 | It matches the results directory name |
+
+> The benchmark model name is read from **`point.yaml`** (§8.3). Policies PR #130 removed
+> `model_name` from §8.2's `system_desc.json` table and template, and §8.5 now sources a
+> result ID's `model_id` from the point's disclosure. A `system_desc.json` that still
+> carries `model_name` or `model_id` is read only as a fallback, for bundles built before
+> that change.
 | `max-concurrency-declared` | §7 | `max_supported_concurrency` (C_max) present and > 32 |
 | `tps-utilization` | §8.2 | Equals `system_tps / max(system_tps)` over the point's own curve |
 | `power-descriptor` | §4.5.2 | `system_power.json` present per system and states a power §4.5.2 can derive |
@@ -280,7 +286,8 @@ not satisfy High Concurrency coverage.
 | `warmup-present` | §6.3.3 | Warmup declaration present |
 | `warmup-logs-retained` | §6.3.2 | Warmup log retention declared (warn) |
 | `warmup-salt` | §6.3.3 | Warns when the warmup salt is enabled |
-| `config-consistency-dataset` | §16 | All points use the same dataset |
+| `config-consistency-dataset` | §9.1 | All points use the same dataset |
+| `config-consistency-model` | §9.1 | All points declare the same `model_name` |
 
 ### Seed binding (§4.6)
 
