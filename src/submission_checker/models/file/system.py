@@ -238,12 +238,9 @@ class SystemDescription(BaseModel):
     # Division / model metadata. §8.2 keeps only `division`; the model fields moved to
     # point.yaml (§8.3), `model_name` most recently — policies PR #130 removed it from
     # §8.2's table and template, and §8.5 now sources the result ID's `model_id` from
-    # `point.yaml`. They stay readable and optional, not dropped: a bundle built before
-    # that change is not wrong, and they are the fallback `model-name-consistency`
-    # reads when no point declares a name.
+    # `point.yaml`. Nothing reads `model_name` or `model_id` from here any more, so they
+    # are not declared; `extra="allow"` still parses a bundle that carries them.
     division: Division
-    model_id: str | None = None
-    model_name: str | None = None
     model_precision: str | None = None
     link_to_model: str | None = None
     link_to_model_transformation: str | None = None

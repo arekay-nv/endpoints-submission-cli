@@ -559,7 +559,12 @@ class SubmissionChecker:
             results.extend(seed_binding._check_results)
 
         if self._drafters_error is None:
-            benchmark = system_desc.model_name or model_dir.name
+            # §8.3's disclosure names the benchmark; §8.2 no longer carries the field.
+            # The directory is the fallback — §8.1 names it after the same value, so it
+            # is the same answer wherever a point failed to declare one.
+            benchmark = next(
+                (p.config.model_name for p in loaded if p.config.model_name), model_dir.name
+            )
             drafter_binding = DrafterBinding(
                 points=valid_points,
                 approved=self._drafters.get(benchmark, []),

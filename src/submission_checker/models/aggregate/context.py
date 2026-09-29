@@ -322,17 +322,21 @@ class ModelContext(BaseModel):
 
     @model_validator(mode="after")
     def _check_model_name_consistency(self) -> ModelContext:
-        """§16: model name in system_desc must match the model directory name.
+        """§8.1: the model directory must be named after the points' ``model_name``.
 
-        The model directory name comes from point.yaml's §8.3 ``model_name`` (last path
-        component, slugified), which is what §8.1's ``results/<system>/<model_name>/``
-        asks for. system_desc.model_id is the authoritative source here;
-        system_desc.model_name is the fallback. Both may be in HuggingFace
-        format (e.g. "meta-llama/Llama-3.1-8B-Instruct") so we take the last "/"
-        component before comparing.
+        §8.1 names it ``results/<system>/<model_name>/`` and §8.5 sources that name from
+        ``point.yaml`` (§8.3), so the disclosure is the only source read. A value may be
+        in HuggingFace form ("meta-llama/Llama-3.1-8B-Instruct"), so the last ``/``
+        component is compared.
 
-        - system_desc has no model id/name  → warning (submitter hasn't filled it in)
-        - system_desc model normalizes to a different name than the directory → error
+        ``system_desc.json`` is not consulted. It stopped defining ``model_name`` when
+        policies PR #130 removed the field, and v1.0 does not read a field the rules no
+        longer define — a bundle whose ``point.yaml`` omits the name is incomplete, and
+        ``point-disclosure-complete`` says so, rather than being quietly rescued by a
+        value from a file that is no longer authoritative.
+
+        - no point declares ``model_name`` → warning
+        - the declared name normalizes to something other than the directory → error
         - they match → ok
         """
 
@@ -344,24 +348,17 @@ class ModelContext(BaseModel):
             slug = re.sub(r"_+", "_", slug).strip("_")
             return slug[:64]
 
-        # §8.1 names the directory after `model_name`, which §8.5 sources from
-        # `point.yaml` (§8.3). §8.2's `system_desc.json` no longer carries the field —
-        # policies PR #130 removed it — so it is read only as a fallback, for a bundle
-        # built before that change.
-        declared = next(
-            (c.model_name for _, c in self.valid_points if c.model_name),
-            None,
+        sd_raw = next(
+            (c.model_name.strip() for _, c in self.valid_points if c.model_name),
+            "",
         )
-        sd_raw = (
-            declared or self.system_desc.model_id or self.system_desc.model_name or ""
-        ).strip()
 
         if not sd_raw:
             self._check_results.append(
                 warn(
                     "model-name-consistency",
-                    f"No point declares model_name and system_desc has no legacy model_id"
-                    f" or model_name; model directory is '{self.model_dir.name}'",
+                    f"No point declares model_name, so the model directory"
+                    f" '{self.model_dir.name}' cannot be checked against §8.1",
                     self.model_dir,
                     "#8.1",
                 )

@@ -180,7 +180,6 @@ def test_required_system_fields_rejected_when_missing(field):
         "submitter_org_names",
         "submitter_contact",
         "system_category",
-        "model_id",
         "model_precision",
         "link_to_model",
         "dataset_id",
@@ -197,6 +196,18 @@ def test_fields_moved_to_point_yaml_are_optional(field):
     payload = {k: v for k, v in _BASE_FLAT.items() if k != field}
     sd = SystemDescription(**payload)
     assert getattr(sd, field) is None
+
+
+@pytest.mark.parametrize("field", ["model_id", "model_name"])
+def test_fields_the_rules_dropped_are_no_longer_declared(field):
+    """Policies PR #130 removed these from §8.2 entirely, so nothing reads them.
+
+    A bundle that still carries one must keep parsing — `extra="allow"` — but the value
+    is not a field of the model, so no rule can reach for it by accident.
+    """
+    sd = SystemDescription(**_BASE_FLAT)
+    assert not hasattr(type(sd), field)
+    assert field not in type(sd).model_fields
 
 
 @pytest.mark.parametrize(

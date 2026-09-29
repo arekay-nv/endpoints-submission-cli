@@ -205,11 +205,12 @@ submission root (§9.1).
 | `model-name-valid` | §3.2 | `point.yaml`'s `model_name` is one of the round's supported models |
 | `model-name-consistency` | §8.1 | It matches the results directory name |
 
-> The benchmark model name is read from **`point.yaml`** (§8.3). Policies PR #130 removed
-> `model_name` from §8.2's `system_desc.json` table and template, and §8.5 now sources a
-> result ID's `model_id` from the point's disclosure. A `system_desc.json` that still
-> carries `model_name` or `model_id` is read only as a fallback, for bundles built before
-> that change.
+> The benchmark model name is read from **`point.yaml`** (§8.3), and from nowhere else.
+> Policies PR #130 removed `model_name` from §8.2's `system_desc.json` table and template,
+> and §8.5 now sources a result ID's `model_id` from the point's disclosure. A
+> `system_desc.json` that still carries `model_name` or `model_id` parses, but the value
+> decides nothing — a point that declares no name is incomplete, and
+> `point-disclosure-complete` reports it.
 | `max-concurrency-declared` | §7 | `max_supported_concurrency` (C_max) present and > 32 |
 | `tps-utilization` | §8.2 | Equals `system_tps / max(system_tps)` over the point's own curve |
 | `power-descriptor` | §4.5.2 | `system_power.json` present per system and states a power §4.5.2 can derive |

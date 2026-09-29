@@ -654,18 +654,21 @@ class TestCheckerEdgeCases:
         ok_results = [r for r in report.results if r.rule == "model-name-consistency" and r.passed]
         assert ok_results
 
-    def test_system_desc_model_id_is_a_legacy_fallback(self, tmp_path):
-        """A bundle built before §8.2 dropped the field still reports against it.
+    def test_system_desc_model_id_is_not_a_fallback(self, tmp_path):
+        """v1.0 reads only §8.3's disclosure — a stale system_desc value decides nothing.
 
-        Policies PR #130 removed `model_name` from `system_desc.json`, so a point that
-        declares none is read from the system description rather than going unchecked.
+        A point that declares no `model_name` is incomplete, which
+        `point-disclosure-complete` reports; it is not quietly rescued by a value from a
+        file §8.2 no longer defines the field in.
         """
         desc = {**_SYSTEM_DESC, "model_id": "mistral-7b"}
         root = _build_submission(
             tmp_path, system_desc=desc, model="llama3-70b", point_model_name=None
         )
         report = _check(root)
-        assert _errors(report, "model-name-consistency")
+        assert not _errors(report, "model-name-consistency")
+        assert _warnings(report, "model-name-consistency")
+        assert _errors(report, "point-disclosure-complete")
 
     def test_model_name_allowed_passes(self, tmp_path):
         """ok when point.yaml's model_name is one of the allowed benchmark models."""
