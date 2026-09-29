@@ -59,8 +59,10 @@ _TPS_TOLERANCE = 0.01
 _TPS_UTILIZATION_ABS_TOL = 0.1
 
 
-# §2 — the only benchmark models accepted this submission round. system_desc.model_name
-# must match one of these exactly.
+# §3.2 — the benchmark models accepted this submission round. The name is read from
+# each point's `point.yaml` (§8.3): policies PR #130 removed `model_name` from §8.2's
+# `system_desc.json` table and template, and §8.5's Result ID now says `model_id`
+# "Must match `model_name` in `point.yaml` (§8.3)".
 _ALLOWED_MODEL_NAMES = ("llama3.1-8b", "gpt-oss-120b", "deepseek-r1")
 
 
@@ -533,7 +535,7 @@ class SubmissionChecker:
         if system_desc is None or sd_path is None:
             return results
 
-        results.extend(self._check_model_name(system_desc, sd_path))
+        results.extend(self._check_model_name(loaded))
 
         # ── Phase 1b: derive C_min, then the region boundaries ────────────────
         regions, region_results = self._derive_regions(
@@ -951,26 +953,46 @@ class SubmissionChecker:
     # Per-curve system-description rules
     # ------------------------------------------------------------------
 
-    def _check_model_name(self, system_desc: SystemDescription, sd_path: Path) -> list[CheckResult]:
-        """§2: ``model_name`` must be one of the accepted benchmark models, exactly."""
-        if system_desc.model_name in _ALLOWED_MODEL_NAMES:
-            return [
-                _ok(
-                    "model-name-valid",
-                    f"model_name {system_desc.model_name!r} is an allowed model",
-                    sd_path,
-                    "#2",
+    def _check_model_name(self, loaded: list[_LoadedPoint]) -> list[CheckResult]:
+        """§3.2: ``model_name`` must be one of the accepted benchmark models, exactly.
+
+        Read from ``point.yaml``, not ``system_desc.json``. §8.2 no longer defines
+        ``model_name`` at all — policies PR #130 removed it from both the table and the
+        template — and §8.5 makes the point's disclosure authoritative: a result ID's
+        ``model_id`` "Must match ``model_name`` in ``point.yaml`` (§8.3)".
+
+        Reported per distinct name rather than per point, so a curve of 32 points does
+        not produce 32 identical lines. Whether the points agree is
+        ``config-consistency-model``'s question; absence is
+        ``point-disclosure-complete``'s, so a point with no name is skipped here rather
+        than reported twice.
+        """
+        seen: dict[str, Path] = {}
+        for point in loaded:
+            name = point.config.model_name
+            if name:
+                seen.setdefault(name, point.yaml_path)
+        if not seen:
+            return []
+        results: list[CheckResult] = []
+        for name, path in seen.items():
+            if name in _ALLOWED_MODEL_NAMES:
+                results.append(
+                    _ok(
+                        "model-name-valid", f"model_name {name!r} is an allowed model", path, "#3.2"
+                    )
                 )
-            ]
-        return [
-            _err(
-                "model-name-valid",
-                f"model_name {system_desc.model_name!r} is not an allowed model; "
-                f"must be exactly one of: {', '.join(_ALLOWED_MODEL_NAMES)}",
-                sd_path,
-                "#2",
-            )
-        ]
+            else:
+                results.append(
+                    _err(
+                        "model-name-valid",
+                        f"model_name {name!r} is not an allowed model; must be exactly one"
+                        f" of: {', '.join(_ALLOWED_MODEL_NAMES)}",
+                        path,
+                        "#3.2",
+                    )
+                )
+        return results
 
     def _check_shared_paths(self, loaded: list[_LoadedPoint]) -> list[CheckResult]:
         """§9.1: each point's ``shared_src`` / ``shared_docs`` must resolve under the root.

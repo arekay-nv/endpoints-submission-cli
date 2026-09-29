@@ -344,16 +344,26 @@ class ModelContext(BaseModel):
             slug = re.sub(r"_+", "_", slug).strip("_")
             return slug[:64]
 
-        sd_raw = (self.system_desc.model_id or self.system_desc.model_name or "").strip()
+        # §8.1 names the directory after `model_name`, which §8.5 sources from
+        # `point.yaml` (§8.3). §8.2's `system_desc.json` no longer carries the field —
+        # policies PR #130 removed it — so it is read only as a fallback, for a bundle
+        # built before that change.
+        declared = next(
+            (c.model_name for _, c in self.valid_points if c.model_name),
+            None,
+        )
+        sd_raw = (
+            declared or self.system_desc.model_id or self.system_desc.model_name or ""
+        ).strip()
 
         if not sd_raw:
             self._check_results.append(
                 warn(
                     "model-name-consistency",
-                    f"system_desc has no model_id or model_name; "
-                    f"model directory is '{self.model_dir.name}'",
+                    f"No point declares model_name and system_desc has no legacy model_id"
+                    f" or model_name; model directory is '{self.model_dir.name}'",
                     self.model_dir,
-                    "#16",
+                    "#8.1",
                 )
             )
         else:
@@ -363,10 +373,10 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     err(
                         "model-name-consistency",
-                        f"system_desc model '{sd_raw}' (normalized: '{sd_normalized}')"
-                        f" does not match model directory '{dir_name}'",
+                        f"Declared model '{sd_raw}' (normalized: '{sd_normalized}') does not"
+                        f" match model directory '{dir_name}'",
                         self.model_dir,
-                        "#16",
+                        "#8.1",
                     )
                 )
             else:
@@ -375,14 +385,40 @@ class ModelContext(BaseModel):
                         "model-name-consistency",
                         f"Model name consistent: {dir_name}",
                         self.model_dir,
-                        "#16",
+                        "#8.1",
                     )
                 )
         return self
 
     @model_validator(mode="after")
     def _check_config_consistency(self) -> ModelContext:
-        """§16: all points must use the same dataset."""
+        """§9.1 "Configuration consistency": one curve, one dataset and one model.
+
+        The model is checked over ``valid_points`` rather than ``loaded_points``: a
+        point whose ``result_summary.json`` failed to load still made a §8.3 disclosure,
+        and disagreeing about which model was measured is a defect either way.
+        """
+        names = {c.model_name for _, c in self.valid_points if c.model_name}
+        if len(names) > 1:
+            self._check_results.append(
+                err(
+                    "config-consistency-model",
+                    "Points disagree on model_name ("
+                    + ", ".join(repr(n) for n in sorted(names))
+                    + "); §8.5 defines one result as a single benchmark model",
+                    self.model_dir,
+                    "#9.1",
+                )
+            )
+        elif names:
+            self._check_results.append(
+                ok(
+                    "config-consistency-model",
+                    f"Model consistent: {next(iter(names))}",
+                    self.model_dir,
+                    "#9.1",
+                )
+            )
         if not self.loaded_points:
             return self
         datasets = {config.dataset for config, _ in self.loaded_points}
@@ -392,7 +428,7 @@ class ModelContext(BaseModel):
                     "config-consistency-dataset",
                     f"Inconsistent datasets across points: {datasets}",
                     self.model_dir,
-                    "#16",
+                    "#9.1",
                 )
             )
         else:
@@ -401,7 +437,7 @@ class ModelContext(BaseModel):
                     "config-consistency-dataset",
                     f"Dataset consistent: {next(iter(datasets))}",
                     self.model_dir,
-                    "#16",
+                    "#9.1",
                 )
             )
         return self
