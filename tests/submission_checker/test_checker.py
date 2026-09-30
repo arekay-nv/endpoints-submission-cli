@@ -262,7 +262,7 @@ _SEEDS = {
 _SAME_AS_DIR = "<same as dir>"
 
 
-def _make_run_yaml(concurrency: int, model_name: str | None = "llama3.1-8b") -> dict:
+def _make_run_yaml(concurrency: int, model_name: str | None = "llama3_1-8b") -> dict:
     """A §8.3-complete point.yaml, so a test sees only the defect it introduced.
 
     ``model_name`` is a parameter because §8.3 is now the authority for it: §8.2
@@ -645,14 +645,13 @@ class TestCheckerEdgeCases:
         report = _check(root)
         assert _errors(report, "model-name-consistency")
 
-    def test_model_name_huggingface_format_matches(self, tmp_path):
-        """ok when model_name uses HuggingFace org/name format — last component compared."""
+    def test_model_name_huggingface_format_is_not_rewritten(self, tmp_path):
+        """err when model_name keeps a HuggingFace org prefix — names are compared exactly."""
         root = _build_submission(
             tmp_path, model="llama3-70b", point_model_name="meta-llama/llama3-70b"
         )
         report = _check(root)
-        ok_results = [r for r in report.results if r.rule == "model-name-consistency" and r.passed]
-        assert ok_results
+        assert _errors(report, "model-name-consistency")
 
     def test_system_desc_model_id_is_not_a_fallback(self, tmp_path):
         """v1.0 reads only §8.3's disclosure — a stale system_desc value decides nothing.
@@ -682,6 +681,31 @@ class TestCheckerEdgeCases:
         root = _build_submission(tmp_path, model="mistral-7b")
         report = _check(root)
         assert _errors(report, "model-name-valid")
+
+    def test_model_name_canonical_llama_passes_both(self, tmp_path):
+        """The canonical spelling is also the directory name, so both checks pass."""
+        root = _build_submission(tmp_path, model="llama3_1-8b")
+        report = _check(root)
+        assert not _errors(report, "model-name-valid")
+        assert not _errors(report, "model-name-consistency")
+
+    def test_model_name_non_canonical_errors_with_hint(self, tmp_path):
+        """A name that only matches once canonicalised fails, and names the fix."""
+        root = _build_submission(tmp_path, model="llama3.1-8b")
+        report = _check(root)
+        errors = _errors(report, "model-name-valid")
+        assert errors
+        assert "write 'llama3_1-8b'" in errors[0].message
+
+    def test_model_name_unrelated_errors_without_hint(self, tmp_path):
+        """No hint when canonicalising does not reach an allowed name either."""
+        root = _build_submission(
+            tmp_path, model="llama3-70b", point_model_name="meta-llama/Llama-3.1-8B"
+        )
+        report = _check(root)
+        errors = _errors(report, "model-name-valid")
+        assert errors
+        assert "write" not in errors[0].message
 
     def test_system_desc_model_name_no_longer_decides(self, tmp_path):
         """§8.2 dropped the field, so a stale value there must not fail a valid point.

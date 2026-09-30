@@ -48,6 +48,7 @@ __all__ = [
     "SRC_DIR",
     "SYSTEM_DESC_JSON",
     "SYSTEM_POWER_JSON",
+    "canonical_model_name",
     "iter_curves",
     "iter_point_dirs",
     "parse_point_dir",
@@ -91,6 +92,26 @@ DOCUMENTATION_SUBDIR = "documentation"
 
 #: Files a run folder must contain for `runs create` to accept it.
 REQUIRED_RUN_FILES = (SYSTEM_DESC_JSON, POINT_YAML, RESULT_SUMMARY_JSON)
+
+# ── Benchmark-model directories ───────────────────────────────────────────────
+
+
+def canonical_model_name(name: str) -> str:
+    """Return the canonical spelling of a benchmark model name.
+
+    Drops a HuggingFace org prefix and turns every character other than a letter,
+    digit, ``_`` or ``-`` into ``_``: ``"llama3.1-8b"`` becomes ``"llama3_1-8b"``. The
+    builder names ``results/<system>/<model_name>/`` the same way, so a name already
+    in this form is also its own directory name.
+
+    The checker does not rewrite a submitter's name with this. ``point.yaml`` must
+    declare the canonical form; this only builds the hint for a name that does not.
+    """
+    part = name.split("/")[-1].strip()
+    slug = re.sub(r"[^\w\-]", "_", part)
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug[:64]
+
 
 # ── Pareto-point directories ──────────────────────────────────────────────────
 

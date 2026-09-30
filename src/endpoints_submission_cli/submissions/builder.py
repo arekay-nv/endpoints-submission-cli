@@ -427,8 +427,11 @@ def _extract_model(config: dict[str, Any], point_config: dict[str, Any]) -> str:
     §8.3 defines ``model_name`` — so the disclosure is the authoritative source and
     config.yaml, which is optional as of v1.0, is only a fallback. Preferring the
     optional file put a name in the tree that §8.1 does not define (config.yaml carries
-    a HuggingFace path, giving ``Llama-3_1-8B-Instruct`` where the spec asks for
-    ``llama3.1-8b``).
+    a HuggingFace path, giving ``Llama-3_1-8B-Instruct`` where the checker asks for
+    ``llama3_1-8b``).
+
+    The checker requires ``point.yaml`` to declare the canonical name, which
+    :func:`_slugify` leaves unchanged, so the directory is the declared name verbatim.
 
     This was already the precedence before the rules agreed: §8.2 defined ``model_name``
     until policies PR #130 removed it, and §8.5 now sources the result ID's ``model_id``

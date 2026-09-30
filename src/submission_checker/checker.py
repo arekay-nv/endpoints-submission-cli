@@ -63,7 +63,11 @@ _TPS_UTILIZATION_ABS_TOL = 0.1
 # each point's `point.yaml` (§8.3): policies PR #130 removed `model_name` from §8.2's
 # `system_desc.json` table and template, and §8.5's Result ID now says `model_id`
 # "Must match `model_name` in `point.yaml` (§8.3)".
-_ALLOWED_MODEL_NAMES = ("llama3.1-8b", "gpt-oss-120b", "deepseek-r1")
+#
+# Every entry is in `layout.canonical_model_name` form, and a declared name must match
+# one exactly: the checker never rewrites what a submitter wrote. The canonical form is
+# also the §8.1 directory name, so `llama3_1-8b` rather than `llama3.1-8b`.
+_ALLOWED_MODEL_NAMES = ("llama3_1-8b", "gpt-oss-120b", "deepseek-r1")
 
 
 def _results_has_accuracy_scores(path: Path) -> bool:
@@ -966,6 +970,10 @@ class SubmissionChecker:
         template — and §8.5 makes the point's disclosure authoritative: a result ID's
         ``model_id`` "Must match ``model_name`` in ``point.yaml`` (§8.3)".
 
+        The name must already be canonical (:func:`layout.canonical_model_name`). A
+        name that only matches once canonicalised is still an error, and the message
+        says which spelling to use instead.
+
         Reported per distinct name rather than per point, so a curve of 32 points does
         not produce 32 identical lines. Whether the points agree is
         ``config-consistency-model``'s question; absence is
@@ -988,15 +996,14 @@ class SubmissionChecker:
                     )
                 )
             else:
-                results.append(
-                    _err(
-                        "model-name-valid",
-                        f"model_name {name!r} is not an allowed model; must be exactly one"
-                        f" of: {', '.join(_ALLOWED_MODEL_NAMES)}",
-                        path,
-                        "#3.2",
-                    )
+                message = (
+                    f"model_name {name!r} is not an allowed model; must be exactly one"
+                    f" of: {', '.join(_ALLOWED_MODEL_NAMES)}"
                 )
+                canonical = layout.canonical_model_name(name)
+                if canonical in _ALLOWED_MODEL_NAMES:
+                    message += f" (write {canonical!r})"
+                results.append(_err("model-name-valid", message, path, "#3.2"))
         return results
 
     def _check_shared_paths(self, loaded: list[_LoadedPoint]) -> list[CheckResult]:

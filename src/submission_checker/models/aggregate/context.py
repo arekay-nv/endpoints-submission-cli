@@ -5,7 +5,6 @@ Handles accuracy and overall compliance checks.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 __all__ = ["ModelContext"]
@@ -325,9 +324,10 @@ class ModelContext(BaseModel):
         """§8.1: the model directory must be named after the points' ``model_name``.
 
         §8.1 names it ``results/<system>/<model_name>/`` and §8.5 sources that name from
-        ``point.yaml`` (§8.3), so the disclosure is the only source read. A value may be
-        in HuggingFace form ("meta-llama/Llama-3.1-8B-Instruct"), so the last ``/``
-        component is compared.
+        ``point.yaml`` (§8.3), so the disclosure is the only source read. The two are
+        compared exactly: ``model-name-valid`` already requires the canonical spelling,
+        which is the directory name the builder writes, so rewriting the declared name
+        here would only let this check pass a name that one fails.
 
         ``system_desc.json`` is not consulted. It stopped defining ``model_name`` when
         policies PR #130 removed the field, and v1.0 does not read a field the rules no
@@ -336,24 +336,15 @@ class ModelContext(BaseModel):
         value from a file that is no longer authoritative.
 
         - no point declares ``model_name`` → warning
-        - the declared name normalizes to something other than the directory → error
+        - the declared name differs from the directory → error
         - they match → ok
         """
-
-        # Strips HuggingFace org prefix, lowercases, and replaces non-word chars with
-        # underscores so "meta-llama/Llama-3.1-8B" compares equal to "Llama-3.1-8B".
-        def _normalize(name: str) -> str:
-            part = name.split("/")[-1].strip()
-            slug = re.sub(r"[^\w\-]", "_", part)
-            slug = re.sub(r"_+", "_", slug).strip("_")
-            return slug[:64]
-
-        sd_raw = next(
-            (c.model_name.strip() for _, c in self.valid_points if c.model_name),
+        declared = next(
+            (c.model_name for _, c in self.valid_points if c.model_name),
             "",
         )
 
-        if not sd_raw:
+        if not declared:
             self._check_results.append(
                 warn(
                     "model-name-consistency",
@@ -364,14 +355,12 @@ class ModelContext(BaseModel):
                 )
             )
         else:
-            sd_normalized = _normalize(sd_raw)
             dir_name = self.model_dir.name
-            if sd_normalized != dir_name:
+            if declared != dir_name:
                 self._check_results.append(
                     err(
                         "model-name-consistency",
-                        f"Declared model '{sd_raw}' (normalized: '{sd_normalized}') does not"
-                        f" match model directory '{dir_name}'",
+                        f"Declared model '{declared}' does not match model directory '{dir_name}'",
                         self.model_dir,
                         "#8.1",
                     )

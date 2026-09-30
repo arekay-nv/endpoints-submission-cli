@@ -202,8 +202,12 @@ submission root (§9.1).
 | `system-description-present` | §8.2 | Every point has a `system_desc.json` |
 | `system-description-valid` | §8.2 | It parses against the `SystemDescription` schema |
 | `system-description-consistency` | §8.5 | Every point of a curve describes the same system |
-| `model-name-valid` | §3.2 | `point.yaml`'s `model_name` is one of the round's supported models |
-| `model-name-consistency` | §8.1 | It matches the results directory name |
+| `model-name-valid` | §3.2 | `point.yaml`'s `model_name` is exactly one of the round's supported models, spelled canonically |
+| `model-name-consistency` | §8.1 | It is exactly the results directory name |
+| `max-concurrency-declared` | §7 | `max_supported_concurrency` (C_max) present and > 32 |
+| `tps-utilization` | §8.2 | Equals `system_tps / max(system_tps)` over the point's own curve |
+| `power-descriptor` | §4.5.2 | `system_power.json` present per system and states a power §4.5.2 can derive |
+| `power-estimated` | §4.5.2 | Flags component groups left for MLCommons to auto-populate (warn) |
 
 > The benchmark model name is read from **`point.yaml`** (§8.3), and from nowhere else.
 > Policies PR #130 removed `model_name` from §8.2's `system_desc.json` table and template,
@@ -211,10 +215,10 @@ submission root (§9.1).
 > `system_desc.json` that still carries `model_name` or `model_id` parses, but the value
 > decides nothing — a point that declares no name is incomplete, and
 > `point-disclosure-complete` reports it.
-| `max-concurrency-declared` | §7 | `max_supported_concurrency` (C_max) present and > 32 |
-| `tps-utilization` | §8.2 | Equals `system_tps / max(system_tps)` over the point's own curve |
-| `power-descriptor` | §4.5.2 | `system_power.json` present per system and states a power §4.5.2 can derive |
-| `power-estimated` | §4.5.2 | Flags component groups left for MLCommons to auto-populate (warn) |
+>
+> The name must be written in canonical form, which is also its directory name:
+> `llama3_1-8b`, `gpt-oss-120b` or `deepseek-r1`. The checker does not rewrite it, so
+> `llama3.1-8b` fails `model-name-valid`, and the error names the spelling to use.
 
 §4.5.2's power model:
 
