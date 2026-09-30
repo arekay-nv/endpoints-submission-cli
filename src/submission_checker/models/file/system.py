@@ -227,19 +227,20 @@ class SystemDescription(BaseModel):
     pipeline_parallel: int | None = None
     data_parallel: int | None = None
     batch: int | None = None
+    #: Dropped from §8.2 by policies PR #127, table and template both. Still read, so a
+    #: bundle that carries it parses rather than failing on an unexpected field.
     link_config: str | None = None
     #: ``system_tps / max(system_tps)`` over the point's own curve. A per-point value
     #: in a file §8.2 calls a system description — raised with the WG; see
     #: :meth:`~submission_checker.checker.SubmissionChecker._check_tps_utilization`.
     tps_utilization: float | None = None
 
-    # Division / model metadata. §8.2 keeps `division` and `model_name`; everything
-    # else here moved to point.yaml (§8.3) and is optional, not dropped — an existing
-    # bundle that still carries it is not wrong, and model_id feeds the model-name
-    # consistency check.
+    # Division / model metadata. §8.2 keeps only `division`; the model fields moved to
+    # point.yaml (§8.3), `model_name` most recently — policies PR #130 removed it from
+    # §8.2's table and template, and §8.5 now sources the result ID's `model_id` from
+    # `point.yaml`. Nothing reads `model_name` or `model_id` from here any more, so they
+    # are not declared; `extra="allow"` still parses a bundle that carries them.
     division: Division
-    model_id: str | None = None
-    model_name: str | None = None
     model_precision: str | None = None
     link_to_model: str | None = None
     link_to_model_transformation: str | None = None

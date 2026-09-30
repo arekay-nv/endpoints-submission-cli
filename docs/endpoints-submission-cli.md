@@ -479,7 +479,7 @@ dataset: cnn_dailymail
 # §8.3 disclosure
 division: Standardized
 max_supported_concurrency: 1024
-model_name: llama3.1-8b
+model_name: llama3_1-8b
 model_precision: FP16
 link_to_model: https://example.com/model
 link_to_model_transformation: https://example.com/quantization

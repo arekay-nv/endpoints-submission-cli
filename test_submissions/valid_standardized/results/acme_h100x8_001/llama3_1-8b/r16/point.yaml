@@ -7,7 +7,7 @@ division: Standardized
 link_to_model: https://example.com/model
 link_to_model_transformation: https://example.com/quantization
 max_supported_concurrency: 1000
-model_name: llama3.1-8b
+model_name: llama3_1-8b
 model_notes: ''
 model_precision: FP16
 runtime_settings:

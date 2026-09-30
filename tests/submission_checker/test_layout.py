@@ -45,14 +45,14 @@ class TestPointDirNames:
 class TestIterCurves:
     def test_yields_every_system_model_pair(self, tmp_path: Path) -> None:
         for system in ("sys_a", "sys_b"):
-            for model in ("llama3.1-8b", "deepseek-r1"):
+            for model in ("llama3_1-8b", "deepseek-r1"):
                 (tmp_path / system / model).mkdir(parents=True)
         pairs = [(s.name, m.name) for s, m in layout.iter_curves(tmp_path)]
         assert pairs == [
             ("sys_a", "deepseek-r1"),
-            ("sys_a", "llama3.1-8b"),
+            ("sys_a", "llama3_1-8b"),
             ("sys_b", "deepseek-r1"),
-            ("sys_b", "llama3.1-8b"),
+            ("sys_b", "llama3_1-8b"),
         ]
 
     def test_files_are_not_curves(self, tmp_path: Path) -> None:
