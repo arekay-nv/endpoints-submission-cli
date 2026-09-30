@@ -68,13 +68,16 @@ _TPS_UTILIZATION_ABS_TOL = 0.1
 # "at least 6 weeks before the submission round opens", so a new round should not need
 # a new checker. `data/seed_sets.yaml` and `data/approved_drafters.yaml` are the
 # pattern to follow when that is worth doing.
+#
+# `deepseek-v4-pro` is the README's "DeepSeek-V4-Pro (DSV4)", which its example config
+# serves as `deepseek-ai/DeepSeek-V4-Pro-0813`.
 _ALLOWED_MODEL_NAMES = (
     "llama3.1-8b",
     "gpt-oss-120b",
     "deepseek-r1",
     "kimi-k3",
-    "qwen3.6-35b-a3b",
-    "deepseek-v4.1-flash",
+    "qwen3_6-35b-a3b",
+    "deepseek-v4-pro",
 )
 
 

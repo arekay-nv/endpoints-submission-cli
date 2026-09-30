@@ -37,7 +37,7 @@ def _offline_config(concurrency: int = 24576, offline: str = "dedicated") -> Poi
         dataset="open_orca",
         offline=offline,
         runtime_settings=RuntimeSettings(
-            load_pattern="offline",
+            load_pattern="max_throughput",  # the reference implementation's Offline pattern
             runtime=RuntimeSettings.Runtime(scheduler_rng_seed=1, sample_index_rng_seed=2),
         ),
     )
@@ -572,6 +572,40 @@ class TestAgenticDetermination:
         assert not [
             r for r in ctx._check_results if r.rule == "benchmark-type-consistency" and not r.passed
         ]
+
+    def test_dedicated_offline_run_does_not_split_a_single_turn_curve(self, tmp_path: Path) -> None:
+        """§6.1 gives the Offline point its own pattern, so it is not a disagreement."""
+        pts = [
+            (tmp_path / "a.yaml", _config(concurrency=16)),
+            (tmp_path / "b.yaml", _config(concurrency=64)),
+            (tmp_path / "c.yaml", _offline_config()),
+        ]
+        ctx = _model_ctx(tmp_path, valid_points=pts)
+        assert not ctx.is_agentic
+        assert not [
+            r for r in ctx._check_results if r.rule == "benchmark-type-consistency" and not r.passed
+        ]
+
+    def test_dedicated_offline_run_on_an_agentic_curve_is_still_read_as_agentic(
+        self, tmp_path: Path
+    ) -> None:
+        """§5.7 forbids it, so offline-point-present must see an agentic curve to say so."""
+        pts = [
+            (tmp_path / "a.yaml", self._agentic(16)),
+            (tmp_path / "b.yaml", self._agentic(64)),
+            (tmp_path / "c.yaml", _offline_config()),
+        ]
+        ctx = _model_ctx(tmp_path, valid_points=pts)
+        assert ctx.is_agentic
+        assert not [
+            r for r in ctx._check_results if r.rule == "benchmark-type-consistency" and not r.passed
+        ]
+        errors = [
+            r
+            for r in ctx._check_results
+            if r.rule == "offline-point-present" and r.severity == Severity.ERROR
+        ]
+        assert errors and "Agentic benchmark declares an Offline point" in errors[0].message
 
     def test_absent_offline_is_correct_for_an_agentic_curve(self, tmp_path: Path) -> None:
         """§5.7: an agentic submission "neither requires nor may include" one."""

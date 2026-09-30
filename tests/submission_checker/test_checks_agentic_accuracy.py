@@ -26,12 +26,20 @@ def _agentic_config(concurrency: int = 64) -> PointConfig:
     return _config(concurrency=concurrency, lp_type="agentic_inference")
 
 
-def _accuracy(inline: float | None = None, swebench: float | None = None) -> AccuracyResult:
+def _accuracy(
+    inline: float | None = None, swebench: float | None = None, *, raw: bool = False
+) -> AccuracyResult:
+    """Accuracy results from percentages, stored as the fractions the scorers report.
+
+    Percentages keep the tests readable against the README's thresholds. ``raw`` stores
+    the values unchanged, for the tests about the unit itself.
+    """
+    scale = 1.0 if raw else 0.01
     root: dict[str, dict[str, object]] = {}
     if inline is not None:
-        root["agentic_combined"] = {"score": inline, "num_samples": 613}
+        root["agentic_combined"] = {"score": inline * scale, "num_samples": 613}
     if swebench is not None:
-        root["swe_bench"] = {"score": swebench, "num_samples": 200}
+        root["swe_bench"] = {"score": swebench * scale, "num_samples": 200}
     return AccuracyResult(root)
 
 
@@ -57,9 +65,9 @@ class TestTargetLookup:
         [
             ("kimi-k3", "Kimi K3"),
             ("Kimi-K3-NVFP4", "Kimi K3"),
-            ("qwen3.6-35b-a3b", "Qwen3.6-35B-A3B"),
+            ("qwen3_6-35b-a3b", "Qwen3.6-35B-A3B"),
             ("Qwen3.6-35B-A3B-FP8", "Qwen3.6-35B-A3B"),
-            ("deepseek-v4.1-flash", "DSV4"),
+            ("deepseek-v4-pro", "DSV4"),
         ],
     )
     def test_recognised(self, model: str, name: str) -> None:
@@ -73,7 +81,7 @@ class TestTargetLookup:
 
     def test_dsv4_thresholds_are_unpublished(self) -> None:
         """The README records every DSV4 threshold as TBD."""
-        targets = get_agentic_targets("deepseek-v4.1-flash")
+        targets = get_agentic_targets("deepseek-v4-pro")
         assert targets is not None and not targets.published
 
 
@@ -90,7 +98,7 @@ class TestGateScope:
         assert hits and hits[0].severity == Severity.WARNING
 
     def test_dsv4_warns_that_thresholds_are_tbd(self, tmp_path: Path) -> None:
-        ctx = _ctx(tmp_path, model_name="deepseek-v4.1-flash")
+        ctx = _ctx(tmp_path, model_name="deepseek-v4-pro")
         hits = _hits(ctx, "agentic-accuracy")
         assert hits and hits[0].severity == Severity.WARNING
         assert "TBD" in hits[0].message
@@ -124,12 +132,24 @@ class TestInlineAccuracy:
 
     def test_fractional_scores_are_rescaled(self, tmp_path: Path) -> None:
         """Scorers report 0–1; the README's thresholds are percentages."""
-        ctx = _ctx(tmp_path, accuracy_by_point={16: _accuracy(inline=0.589)})
+        ctx = _ctx(tmp_path, accuracy_by_point={16: _accuracy(inline=0.589, raw=True)})
         assert not _errors(ctx, "agentic-accuracy-inline")
+
+    def test_tiny_fraction_is_not_read_as_a_percentage(self, tmp_path: Path) -> None:
+        """0.009 is 0.9%, not 90% — the unit is never guessed from the value."""
+        ctx = _ctx(tmp_path, accuracy_by_point={16: _accuracy(inline=0.009, raw=True)})
+        errors = _errors(ctx, "agentic-accuracy-inline")
+        assert errors and "0.90 <" in errors[0].message
+
+    def test_value_outside_unit_interval_errors(self, tmp_path: Path) -> None:
+        """A percentage where a fraction belongs is malformed, not rescaled."""
+        ctx = _ctx(tmp_path, accuracy_by_point={16: _accuracy(inline=58.9, raw=True)})
+        errors = _errors(ctx, "agentic-accuracy-inline")
+        assert errors and "not a fraction" in errors[0].message
 
     def test_qwen_uses_its_own_threshold(self, tmp_path: Path) -> None:
         """56.0 clears Qwen's 55.86 and fails Kimi's 58.32."""
-        for model, fails in (("qwen3.6-35b-a3b", False), ("kimi-k3", True)):
+        for model, fails in (("qwen3_6-35b-a3b", False), ("kimi-k3", True)):
             ctx = _ctx(tmp_path, model_name=model, accuracy_by_point={16: _accuracy(inline=56.0)})
             assert bool(_errors(ctx, "agentic-accuracy-inline")) is fails
 
@@ -143,11 +163,15 @@ class TestInlineAccuracy:
 class TestSweBenchMeanOfN:
     """§4.3 multi-turn: the mean must clear; "individual results need not"."""
 
+    # One point in each mandatory band under the shared test regions: Ultra Low (≤32),
+    # Low (33–42), Medium (43–131), High (132–1024).
+    _BANDS = (16, 40, 64, 256)
+
     def _four(self, tmp_path: Path, scores: list[float]):
         return _ctx(
             tmp_path,
             accuracy_by_point={
-                c: _accuracy(swebench=s) for c, s in zip((16, 64, 256, 1024), scores, strict=True)
+                c: _accuracy(swebench=s) for c, s in zip(self._BANDS, scores, strict=True)
             },
         )
 
@@ -171,6 +195,37 @@ class TestSweBenchMeanOfN:
         ctx = _ctx(tmp_path, accuracy_by_point={16: _accuracy(inline=60.0)})
         hits = _hits(ctx, "agentic-accuracy-swebench")
         assert hits and hits[0].severity == Severity.WARNING
+
+    def test_four_bands_pass_without_remark(self, tmp_path: Path) -> None:
+        ctx = self._four(tmp_path, [96.0, 96.0, 96.0, 96.0])
+        hits = _hits(ctx, "agentic-accuracy-swebench")
+        assert [h.severity for h in hits] == [Severity.INFO]
+        assert "mean of 4 bands" in hits[0].message
+
+    def test_extra_results_in_a_band_cannot_outvote_the_others(self, tmp_path: Path) -> None:
+        """Three strong High results must not rescue three weak bands.
+
+        Per point, (86 + 92 + 96 + 99 + 99 + 99) / 6 = 95.17 would clear Kimi's 93.5.
+        Per band, High counts once: (86 + 92 + 96 + 99) / 4 = 93.25, which does not.
+        """
+        scores = {16: 86.0, 40: 92.0, 64: 96.0, 256: 99.0, 512: 99.0, 1024: 99.0}
+        ctx = _ctx(
+            tmp_path, accuracy_by_point={c: _accuracy(swebench=s) for c, s in scores.items()}
+        )
+        warnings = [
+            h for h in _hits(ctx, "agentic-accuracy-swebench") if h.severity == Severity.WARNING
+        ]
+        assert warnings and "high concurrency has 3" in warnings[0].message
+        errors = _errors(ctx, "agentic-accuracy-swebench")
+        assert errors and "= 93.25" in errors[0].message
+
+    def test_result_outside_mandatory_bands_is_left_out(self, tmp_path: Path) -> None:
+        """A margin point (above C_max) is not one of the N required results."""
+        scores = {16: 96.0, 40: 96.0, 64: 96.0, 256: 96.0, 1100: 0.0}
+        ctx = _ctx(
+            tmp_path, accuracy_by_point={c: _accuracy(swebench=s) for c, s in scores.items()}
+        )
+        assert not _errors(ctx, "agentic-accuracy-swebench")
 
 
 @pytest.mark.unit

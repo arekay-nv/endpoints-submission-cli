@@ -42,6 +42,14 @@ _MIN_POINTS_WITH_DEDICATED_OFFLINE = 8
 #: §5.7.2's throughput tolerance between a dedicated Offline run and the C_max point.
 #: A tolerance for run-to-run variation, not a target.
 _OFFLINE_TPS_MARGIN = 0.98
+
+#: §5.3's four mandatory concurrency points, one per band, each requiring accuracy.
+_MANDATORY_BANDS = (
+    "ultra_low_concurrency",
+    "low_concurrency",
+    "med_concurrency",
+    "high_concurrency",
+)
 _MIN_POINTS = 7
 _MAX_POINTS = 32
 
@@ -97,16 +105,37 @@ class ModelContext(BaseModel):
         ``benchmark-type-consistency`` and the curve is treated as non-agentic — the
         stricter reading, since it keeps the Offline requirement in force rather than
         letting one mislabelled point switch it off.
+
+        A dedicated Offline run is left out of the vote (see
+        :attr:`_type_voting_points`), so an agentic curve that wrongly includes one is
+        still read as agentic, and ``offline-point-present`` rejects it under §5.7.
         """
-        patterns = {c.runtime_settings.load_pattern for _, c in self.valid_points}
+        patterns = {c.runtime_settings.load_pattern for _, c in self._type_voting_points}
         return patterns == {LOAD_PATTERN_AGENTIC}
+
+    @property
+    def _type_voting_points(self) -> list[tuple[Path, PointConfig]]:
+        """The points whose load pattern declares the benchmark type.
+
+        §6.1 gives the Offline point its own pattern — "It is the only point for which
+        the fixed-concurrency pattern is not used" — and the reference implementation
+        names it ``max_throughput``. A dedicated Offline run therefore disagrees with
+        the rest of a correct single-turn curve by design, and says nothing about the
+        benchmark type. An *elected* point is an ordinary fixed-concurrency run, so it
+        still votes.
+        """
+        return [(p, c) for p, c in self.valid_points if c.offline != OFFLINE_DEDICATED]
 
     @model_validator(mode="after")
     def _check_benchmark_type_consistency(self) -> ModelContext:
-        """§8.5: one curve is one benchmark, so its points must agree on the type."""
-        if not self.valid_points:
+        """§8.5: one curve is one benchmark, so its points must agree on the type.
+
+        Only :attr:`_type_voting_points` are compared: §6.1 expects a dedicated Offline
+        run to use a different pattern from the rest of its curve.
+        """
+        if not self._type_voting_points:
             return self
-        patterns = sorted({c.runtime_settings.load_pattern for _, c in self.valid_points})
+        patterns = sorted({c.runtime_settings.load_pattern for _, c in self._type_voting_points})
         if len(patterns) > 1:
             self._check_results.append(
                 err(
@@ -523,13 +552,7 @@ class ModelContext(BaseModel):
             if band is not None and band != "low_latency":
                 covered.add(band)
 
-        required = (
-            "ultra_low_concurrency",
-            "low_concurrency",
-            "med_concurrency",
-            "high_concurrency",
-        )
-        missing = [band for band in required if band not in covered]
+        missing = [band for band in _MANDATORY_BANDS if band not in covered]
         if missing:
             self._check_results.append(
                 err(
@@ -575,14 +598,17 @@ class ModelContext(BaseModel):
                 )
         return self
 
-    def _dataset_score(self, result: AccuracyResult, dataset: str) -> float | None:
-        """One dataset's scalar score from a point's accuracy results, rescaled to 0–100.
+    def _dataset_score(self, concurrency: int, dataset: str, rule: str) -> float | None:
+        """One dataset's scalar score from a point's accuracy results, as a percentage.
 
-        Agentic scorers report a fraction; the README's thresholds are percentages.
-        Only a value that cannot already be a percentage is rescaled, so a scorer that
-        reports 58.9 and one that reports 0.589 both gate correctly.
+        Both agentic scorers report a fraction — the reference ``SWEBenchScorer``
+        returns ``resolved / denominator`` and ``AgenticInferenceInlineScorer`` a mean
+        of per-turn scores in [0, 1] — while the README's thresholds are percentages,
+        so the value is always rescaled. The unit is never guessed from the value: a
+        true 0.9% reported as 0.009 would otherwise pass for 0.9 read as 90%. A value
+        outside [0, 1] is reported under *rule* and yields ``None``.
         """
-        scores = result.metric_scores().get(dataset)
+        scores = self.accuracy_by_point[concurrency].metric_scores().get(dataset)
         if not scores:
             return None
         value = scores.get("score")
@@ -590,7 +616,18 @@ class ModelContext(BaseModel):
             value = next(iter(scores.values()), None)
         if value is None:
             return None
-        return value * 100.0 if 0.0 <= value <= 1.0 else value
+        if not 0.0 <= value <= 1.0:
+            self._check_results.append(
+                err(
+                    rule,
+                    f"r{concurrency}: `{dataset}` score {value} is not a fraction in [0, 1],"
+                    " which is what the reference scorer reports",
+                    self.points_dir,
+                    "#4.3",
+                )
+            )
+            return None
+        return value * 100.0
 
     @model_validator(mode="after")
     def _check_agentic_accuracy(self) -> ModelContext:
@@ -638,7 +675,7 @@ class ModelContext(BaseModel):
         assert targets.inline_min is not None
         seen = False
         for concurrency in sorted(self.accuracy_by_point):
-            score = self._dataset_score(self.accuracy_by_point[concurrency], INLINE_DATASET)
+            score = self._dataset_score(concurrency, INLINE_DATASET, "agentic-accuracy-inline")
             if score is None:
                 continue
             seen = True
@@ -673,37 +710,79 @@ class ModelContext(BaseModel):
                 )
             )
 
+    def _mandatory_band(self, concurrency: int) -> str | None:
+        """The §5.3 mandatory band a point's accuracy result counts towards, or ``None``.
+
+        One band per point, unlike ``accuracy-coverage``, which lets a low point count
+        towards two bands at once: a mean over bands must not count one result twice.
+        """
+        if concurrency <= ULTRA_LOW_CONCURRENCY_MAX:
+            return "ultra_low_concurrency"
+        assert self.regions is not None
+        band = covered_region(concurrency, self.regions)
+        return band if band in _MANDATORY_BANDS else None
+
     def _gate_agentic_swebench(self, targets: AgenticTargets) -> None:
-        """SWE-bench, mean-of-N across points — §4.3's multi-turn branch.
+        """SWE-bench, mean-of-N over the four mandatory bands — §4.3's multi-turn branch.
 
         "The arithmetic mean of the N required accuracy results MUST meet the quality
-        threshold; individual results need not." A short set is still gated, on the
-        mean of what is present, and said to be short: the missing results are
-        ``accuracy-coverage``'s report, and staying silent here would let a submission
-        with three strong points pass unremarked.
+        threshold; individual results need not." For an agentic benchmark §5.3 puts
+        the N=4 required results at "the four mandatory concurrency points", and §4.3
+        asks for "one accuracy validation run … for each" region. The mean is therefore
+        one value per band, not one per point. A result at a point outside the four
+        bands is not a required result and is left out.
+
+        The rules name no tiebreak for a band with two results; submitter's-choice
+        points share bands with the mandatory ones and look the same on disk. Picking
+        one would let a submitter choose which result counts, so those results are
+        averaged into one value for the band, and the curve is warned about it.
+
+        A short set is still gated, on the mean of the bands present, and said to be
+        short: the missing results are ``accuracy-coverage``'s report, and staying
+        silent here would let a submission with three strong bands pass unremarked.
         """
         assert targets.swebench_min is not None
-        scores = [
-            (c, score)
-            for c in sorted(self.accuracy_by_point)
-            if (score := self._dataset_score(self.accuracy_by_point[c], SWEBENCH_DATASET))
-            is not None
-        ]
-        if not scores:
+        if self.regions is None:
+            return  # region-computation already reports why no band can be assigned
+        by_band: dict[str, list[tuple[int, float]]] = {}
+        for c in sorted(self.accuracy_by_point):
+            score = self._dataset_score(c, SWEBENCH_DATASET, "agentic-accuracy-swebench")
+            band = self._mandatory_band(c)
+            if score is not None and band is not None:
+                by_band.setdefault(band, []).append((c, score))
+        if not by_band:
             self._check_results.append(
                 warn(
                     "agentic-accuracy-swebench",
-                    f"No point reports a `{SWEBENCH_DATASET}` accuracy score; official"
-                    " agentic submissions must enable SWE-bench accuracy",
+                    f"No mandatory-band point reports a `{SWEBENCH_DATASET}` accuracy"
+                    " score; official agentic submissions must enable SWE-bench accuracy",
                     self.points_dir,
                     "#4.3",
                 )
             )
             return
-        mean = sum(score for _, score in scores) / len(scores)
-        n = len(scores)
+        for band, results in by_band.items():
+            if len(results) > 1:
+                listed = ", ".join(f"r{c}" for c, _ in results)
+                self._check_results.append(
+                    warn(
+                        "agentic-accuracy-swebench",
+                        f"{band.replace('_', ' ')} has {len(results)} SWE-bench results"
+                        f" ({listed}); §4.3 expects one per region, so they are averaged"
+                        " into one value for the band",
+                        self.points_dir,
+                        "#4.3",
+                    )
+                )
+        band_scores = [
+            sum(score for _, score in results) / len(results) for results in by_band.values()
+        ]
+        mean = sum(band_scores) / len(band_scores)
+        n = len(band_scores)
         basis = f"mean of {n}" + (
-            f" (§4.3 requires {SWEBENCH_MEAN_OF_N})" if n != SWEBENCH_MEAN_OF_N else ""
+            f" band(s) (§4.3 requires {SWEBENCH_MEAN_OF_N})"
+            if n != SWEBENCH_MEAN_OF_N
+            else " bands"
         )
         if mean < targets.swebench_min:
             self._check_results.append(
