@@ -431,11 +431,18 @@ def _extract_model(config: dict[str, Any], point_config: dict[str, Any]) -> str:
     """Return the slugified benchmark-model name for a run's results directory.
 
     point.yaml wins. §8.1 names the directory ``results/<system>/<model_name>/``, and
-    §8.2 defines ``model_name`` as the name from the round's supported-model list — so
-    the disclosure is the authoritative source and config.yaml, which is optional as of
-    v1.0, is only a fallback. Preferring the optional file put a name in the tree that
-    §8.1 does not define (config.yaml carries a HuggingFace path, giving
-    ``Llama-3_1-8B-Instruct`` where the spec asks for ``llama3.1-8b``).
+    §8.3 defines ``model_name`` — so the disclosure is the authoritative source and
+    config.yaml, which is optional as of v1.0, is only a fallback. Preferring the
+    optional file put a name in the tree that §8.1 does not define (config.yaml carries
+    a HuggingFace path, giving ``Llama-3_1-8B-Instruct`` where the checker asks for
+    ``llama3_1-8b``).
+
+    The checker requires ``point.yaml`` to declare the canonical name, which
+    :func:`_slugify` leaves unchanged, so the directory is the declared name verbatim.
+
+    This was already the precedence before the rules agreed: §8.2 defined ``model_name``
+    until policies PR #130 removed it, and §8.5 now sources the result ID's ``model_id``
+    from ``point.yaml``.
 
     Note this is the opposite precedence from :func:`_extract_run_type`, deliberately:
     see that function for why.

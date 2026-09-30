@@ -12,7 +12,7 @@
 # Shape, per §2.9.4's two identification forms:
 #
 #   drafters:
-#     - benchmark: llama3.1-8b
+#     - benchmark: llama3_1-8b
 #       approved_cohort: 2026-10-C1      # the cohort the updated list was published in
 #       model_id: acme/llama3-eagle      # weight-identified
 #       weight_checksum: sha256:...

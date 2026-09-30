@@ -27,13 +27,13 @@ from submission_checker.models import (
 from .conftest import _REGIONS
 
 _WEIGHT_ENTRY = ApprovedDrafter(
-    benchmark="llama3.1-8b",
+    benchmark="llama3_1-8b",
     approved_cohort="2026-10-C1",
     model_id="acme/llama3-eagle",
     weight_checksum="sha256:abc",
 )
 _CONFIG_ENTRY = ApprovedDrafter(
-    benchmark="llama3.1-8b",
+    benchmark="llama3_1-8b",
     approved_cohort="2026-10-C1",
     target_checksum="sha256:target",
     configuration={"exit_layer": 24},
@@ -59,7 +59,7 @@ def _point(
 
 def _binding(tmp_path: Path, points, approved) -> DrafterBinding:
     return DrafterBinding(
-        points=points, approved=approved, benchmark="llama3.1-8b", model_dir=tmp_path
+        points=points, approved=approved, benchmark="llama3_1-8b", model_dir=tmp_path
     )
 
 
@@ -185,7 +185,7 @@ class TestApprovalLeadTime:
         assert not _errors(self._bind(tmp_path, "2027-05-C0"), "drafter-approval-lead-time")
 
     def test_unevaluable_without_an_approval_cohort(self, tmp_path: Path) -> None:
-        entry = ApprovedDrafter(benchmark="llama3.1-8b", weight_checksum="sha256:abc")
+        entry = ApprovedDrafter(benchmark="llama3_1-8b", weight_checksum="sha256:abc")
         points = [_point(tmp_path, {"weight_checksum": "sha256:abc"})]
         binding = _binding(tmp_path, points, [entry])
         hits = [r for r in binding._check_results if r.rule == "drafter-approval-lead-time"]

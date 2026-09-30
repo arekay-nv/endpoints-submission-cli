@@ -5,7 +5,6 @@ Handles accuracy and overall compliance checks.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 __all__ = ["ModelContext"]
@@ -439,51 +438,48 @@ class ModelContext(BaseModel):
 
     @model_validator(mode="after")
     def _check_model_name_consistency(self) -> ModelContext:
-        """§16: model name in system_desc must match the model directory name.
+        """§8.1: the model directory must be named after the points' ``model_name``.
 
-        The model directory name comes from point.yaml's §8.3 ``model_name`` (last path
-        component, slugified), which is what §8.1's ``results/<system>/<model_name>/``
-        asks for. system_desc.model_id is the authoritative source here;
-        system_desc.model_name is the fallback. Both may be in HuggingFace
-        format (e.g. "meta-llama/Llama-3.1-8B-Instruct") so we take the last "/"
-        component before comparing.
+        §8.1 names it ``results/<system>/<model_name>/`` and §8.5 sources that name from
+        ``point.yaml`` (§8.3), so the disclosure is the only source read. The two are
+        compared exactly: ``model-name-valid`` already requires the canonical spelling,
+        which is the directory name the builder writes, so rewriting the declared name
+        here would only let this check pass a name that one fails.
 
-        - system_desc has no model id/name  → warning (submitter hasn't filled it in)
-        - system_desc model normalizes to a different name than the directory → error
+        ``system_desc.json`` is not consulted. It stopped defining ``model_name`` when
+        policies PR #130 removed the field, and v1.0 does not read a field the rules no
+        longer define — a bundle whose ``point.yaml`` omits the name is incomplete, and
+        ``point-disclosure-complete`` says so, rather than being quietly rescued by a
+        value from a file that is no longer authoritative.
+
+        - no point declares ``model_name`` → warning
+        - the declared name differs from the directory → error
         - they match → ok
         """
+        declared = next(
+            (c.model_name for _, c in self.valid_points if c.model_name),
+            "",
+        )
 
-        # Strips HuggingFace org prefix, lowercases, and replaces non-word chars with
-        # underscores so "meta-llama/Llama-3.1-8B" compares equal to "Llama-3.1-8B".
-        def _normalize(name: str) -> str:
-            part = name.split("/")[-1].strip()
-            slug = re.sub(r"[^\w\-]", "_", part)
-            slug = re.sub(r"_+", "_", slug).strip("_")
-            return slug[:64]
-
-        sd_raw = (self.system_desc.model_id or self.system_desc.model_name or "").strip()
-
-        if not sd_raw:
+        if not declared:
             self._check_results.append(
                 warn(
                     "model-name-consistency",
-                    f"system_desc has no model_id or model_name; "
-                    f"model directory is '{self.model_dir.name}'",
+                    f"No point declares model_name, so the model directory"
+                    f" '{self.model_dir.name}' cannot be checked against §8.1",
                     self.model_dir,
-                    "#16",
+                    "#8.1",
                 )
             )
         else:
-            sd_normalized = _normalize(sd_raw)
             dir_name = self.model_dir.name
-            if sd_normalized != dir_name:
+            if declared != dir_name:
                 self._check_results.append(
                     err(
                         "model-name-consistency",
-                        f"system_desc model '{sd_raw}' (normalized: '{sd_normalized}')"
-                        f" does not match model directory '{dir_name}'",
+                        f"Declared model '{declared}' does not match model directory '{dir_name}'",
                         self.model_dir,
-                        "#16",
+                        "#8.1",
                     )
                 )
             else:
@@ -492,14 +488,40 @@ class ModelContext(BaseModel):
                         "model-name-consistency",
                         f"Model name consistent: {dir_name}",
                         self.model_dir,
-                        "#16",
+                        "#8.1",
                     )
                 )
         return self
 
     @model_validator(mode="after")
     def _check_config_consistency(self) -> ModelContext:
-        """§16: all points must use the same dataset."""
+        """§9.1 "Configuration consistency": one curve, one dataset and one model.
+
+        The model is checked over ``valid_points`` rather than ``loaded_points``: a
+        point whose ``result_summary.json`` failed to load still made a §8.3 disclosure,
+        and disagreeing about which model was measured is a defect either way.
+        """
+        names = {c.model_name for _, c in self.valid_points if c.model_name}
+        if len(names) > 1:
+            self._check_results.append(
+                err(
+                    "config-consistency-model",
+                    "Points disagree on model_name ("
+                    + ", ".join(repr(n) for n in sorted(names))
+                    + "); §8.5 defines one result as a single benchmark model",
+                    self.model_dir,
+                    "#9.1",
+                )
+            )
+        elif names:
+            self._check_results.append(
+                ok(
+                    "config-consistency-model",
+                    f"Model consistent: {next(iter(names))}",
+                    self.model_dir,
+                    "#9.1",
+                )
+            )
         if not self.loaded_points:
             return self
         datasets = {config.dataset for config, _ in self.loaded_points}
@@ -509,7 +531,7 @@ class ModelContext(BaseModel):
                     "config-consistency-dataset",
                     f"Inconsistent datasets across points: {datasets}",
                     self.model_dir,
-                    "#16",
+                    "#9.1",
                 )
             )
         else:
@@ -518,7 +540,7 @@ class ModelContext(BaseModel):
                     "config-consistency-dataset",
                     f"Dataset consistent: {next(iter(datasets))}",
                     self.model_dir,
-                    "#16",
+                    "#9.1",
                 )
             )
         return self

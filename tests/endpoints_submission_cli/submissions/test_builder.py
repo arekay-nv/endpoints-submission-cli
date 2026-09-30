@@ -773,7 +773,7 @@ class TestDirectoryNamingPrecedence:
         sub_dir = build_submission_folder(
             [("run-001", archive)], "standardized", "available", tmp_path / "sub"
         )
-        # point.yaml declares model_name: llama3.1-8b; config.yaml says the HF path.
+        # point.yaml declares model_name: llama3_1-8b; config.yaml says the HF path.
         model_dirs = [p.parent.parent.name for p in sub_dir.rglob("point.yaml")]
         assert model_dirs == ["llama3_1-8b"]
 

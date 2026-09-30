@@ -241,12 +241,55 @@ submission root (§9.1).
 | `system-description-present` | §8.2 | Every point has a `system_desc.json` |
 | `system-description-valid` | §8.2 | It parses against the `SystemDescription` schema |
 | `system-description-consistency` | §8.5 | Every point of a curve describes the same system |
-| `model-name-valid` | §3.2 | `model_name` is one of the round's supported models |
-| `model-name-consistency` | §16 | It matches the results directory name |
+| `model-name-valid` | §3.2 | `point.yaml`'s `model_name` is exactly one of the round's supported models, spelled canonically |
+| `model-name-consistency` | §8.1 | It is exactly the results directory name |
 | `max-concurrency-declared` | §7 | `max_supported_concurrency` (C_max) present and > 32 |
 | `tps-utilization` | §8.2 | Equals `system_tps / max(system_tps)` over the point's own curve |
-| `power-descriptor` | §4.5.2 | `system_power.json` present per system and states a derivable power |
+| `power-descriptor` | §4.5.2 | `system_power.json` present per system and states a power §4.5.2 can derive |
 | `power-estimated` | §4.5.2 | Flags component groups left for MLCommons to auto-populate (warn) |
+
+> The benchmark model name is read from **`point.yaml`** (§8.3), and from nowhere else.
+> Policies PR #130 removed `model_name` from §8.2's `system_desc.json` table and template,
+> and §8.5 now sources a result ID's `model_id` from the point's disclosure. A
+> `system_desc.json` that still carries `model_name` or `model_id` parses, but the value
+> decides nothing — a point that declares no name is incomplete, and
+> `point-disclosure-complete` reports it.
+>
+> The name must be written in canonical form, which is also its directory name:
+> `llama3_1-8b`, `gpt-oss-120b` or `deepseek-r1`. The checker does not rewrite it, so
+> `llama3.1-8b` fails `model-name-valid`, and the error names the spelling to use.
+
+§4.5.2's power model:
+
+```
+System Power     = Major_components + Other_components
+Major_components = CPU_power + Accelerator_power + Network_scale_up_power
+Other_components = overhead_fraction × Major_components
+overhead_fraction = 0.30 liquid-cooled, 0.50 air-cooled
+```
+
+`system_power.json` is read with §4.5.2's own field names — `num_cpu`, `tdp_per_cpu`,
+`num_accelerator`, `tdp_per_accelerator`, `num_switches`, `tdp_per_switch`,
+`public_specification` — and with the generic `count` / `tdp_per_unit` / `link`
+spellings, since §4.5.2 publishes names but no JSON schema.
+
+Three details are easy to get wrong:
+
+- **Scale-out network is not a major component.** §4.5.2 defines `Other_components` as
+  "scale-out networking, storage, power-supply overhead, and cooling", so a declared
+  scale-out group is already inside the overhead fraction. It is read and reported but
+  never summed into the total, which would count it twice.
+- **`overhead_fraction` comes from the cooling method**, not from the submitter. §8.2's
+  system description already declares `cooling`, so the checker reads it from there
+  (system level or `node_types[]`), and a system with mixed node cooling takes the
+  air-cooled fraction — §4.5.2 estimates conservatively. Where no cooling method can be
+  established and none is declared, that is an **error**, not an assumed zero: dropping
+  `Other_components` shrinks the denominator by 23–33 % and inflates `system_tps_per_kw`.
+- **Three paths give the total**, in §4.5.2's own order of precedence: a declared
+  `provisioned_power_w`, then §4.5.2.1 rack-level node scaling
+  (`rack_power_w × submitted_nodes / rack_nodes`), then the component formula. A
+  combined `compute` group stands in for CPU + accelerator where a vendor publishes
+  them as one figure.
 
 ### Regions (§5)
 
@@ -288,7 +331,8 @@ not satisfy High Concurrency coverage.
 | `warmup-present` | §6.3.3 | Warmup declaration present |
 | `warmup-logs-retained` | §6.3.2 | Warmup log retention declared (warn) |
 | `warmup-salt` | §6.3.3 | Warns when the warmup salt is enabled |
-| `config-consistency-dataset` | §16 | All points use the same dataset |
+| `config-consistency-dataset` | §9.1 | All points use the same dataset |
+| `config-consistency-model` | §9.1 | All points declare the same `model_name` |
 
 ### Seed binding (§4.6)
 
