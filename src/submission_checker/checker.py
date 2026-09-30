@@ -59,11 +59,19 @@ _TPS_TOLERANCE = 0.01
 _TPS_UTILIZATION_ABS_TOL = 0.1
 
 
-# §3.2 — the benchmark models accepted this submission round. system_desc.model_name
-# must match one of these exactly. The agentic three come from the reference
-# implementation's Agentic Inference example, which §3.2 makes the authority:
-# "The set of supported benchmark models is defined per submission round and
-# maintained in the MLPerf Endpoints reference repository."
+# §3.2 — the benchmark models accepted this submission round. The name is read from
+# each point's `point.yaml` (§8.3): policies PR #130 removed `model_name` from §8.2's
+# `system_desc.json` table and template, and §8.5's Result ID now says `model_id`
+# "Must match `model_name` in `point.yaml` (§8.3)".
+#
+# Every entry is in `layout.canonical_model_name` form, and a declared name must match
+# one exactly: the checker never rewrites what a submitter wrote. The canonical form is
+# also the §8.1 directory name, so `llama3_1-8b` rather than `llama3.1-8b`.
+#
+# The agentic three come from the reference implementation's Agentic Inference
+# example, which §3.2 makes the authority: "The set of supported benchmark models is
+# defined per submission round and maintained in the MLPerf Endpoints reference
+# repository."
 #
 # That sentence also says this list does not belong in a release: §3.2 publishes it
 # "at least 6 weeks before the submission round opens", so a new round should not need
@@ -73,7 +81,7 @@ _TPS_UTILIZATION_ABS_TOL = 0.1
 # `deepseek-v4-pro` is the README's "DeepSeek-V4-Pro (DSV4)", which its example config
 # serves as `deepseek-ai/DeepSeek-V4-Pro-0813`.
 _ALLOWED_MODEL_NAMES = (
-    "llama3.1-8b",
+    "llama3_1-8b",
     "gpt-oss-120b",
     "deepseek-r1",
     "kimi-k3",
