@@ -431,9 +431,10 @@ The OSL field is resolved explicitly and never falls back to the windowed
 `output_sequence_lengths` block, which has the same shape and a different value.
 
 Thresholds come from the reference implementation's Agentic Inference example, which
-§3.2 makes the authority. DeepSeek-V4-Pro (`deepseek-v4-pro`) is a recognised model
-whose thresholds are still TBD there, so it is reported as ungateable rather than passed
-silently.
+§3.2 makes the authority. All three agentic models — Kimi K3 (`kimi-k3`),
+Qwen3.6-35B-A3B (`qwen3_6-35b-a3b`) and DeepSeek-V4.1-Flash (`deepseek-v4_1-flash`) —
+have published thresholds. A recognised model whose thresholds are TBD there would be
+reported as ungateable rather than passed silently.
 
 Both agentic scorers report a fraction in [0, 1], which is always rescaled to a
 percentage; a value outside that range is an error, never read as a percentage already.
