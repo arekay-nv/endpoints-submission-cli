@@ -70,3 +70,16 @@ class TestPrintSubmissionDetail:
         out = capsys.readouterr().out
         row = next(line for line in out.splitlines() if "Penalties Imposed" in line)
         assert "—" in row
+
+    def test_publication_cycle_is_labelled_as_published_cycle(self, capsys) -> None:
+        print_submission_detail({**SUBMISSION_OUT, "publication_cycle": "2026-11-C0"})
+        out = capsys.readouterr().out
+        row = next(line for line in out.splitlines() if "Published In Cycle" in line)
+        assert "2026-11-C0" in row
+        assert "Publication Cycle" not in out
+
+    def test_unpublished_cycle_renders_as_dash(self, capsys) -> None:
+        print_submission_detail({**SUBMISSION_OUT, "publication_cycle": None})
+        out = capsys.readouterr().out
+        row = next(line for line in out.splitlines() if "Published In Cycle" in line)
+        assert "—" in row

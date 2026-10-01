@@ -74,7 +74,9 @@ def print_submission_detail(submission: dict[str, Any]) -> None:
         ("Availability", fmt_str(submission.get("availability"))),
         ("Early Publish", fmt_bool(submission.get("early_publish"))),
         ("Test Submission", fmt_bool(submission.get("is_test"))),
-        ("Publication Cycle", fmt_str(submission.get("publication_cycle"))),
+        # Stamped by the lifecycle manager at publication; nothing assigns it
+        # earlier, so it stays — until the submission is actually published.
+        ("Published In Cycle", fmt_str(submission.get("publication_cycle"))),
         ("Target Availability Date", fmt_str(submission.get("target_availability_date"))),
         ("Embargo Date", fmt_dt(submission.get("embargo_date"))),
         ("Reviewers Assigned", fmt_int(submission.get("reviewers_assigned"))),

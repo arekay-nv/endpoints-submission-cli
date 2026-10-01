@@ -1503,3 +1503,28 @@ class TestProvisionalConfirmation:
             )
         assert result.exit_code == 0, result.output
         assert mock_create.call_args[0][1]["early_publish"] is True
+
+
+class TestNoPublicationCycleFlag:
+    """Nobody picks a cycle at submit time any more; the lifecycle manager
+    publishes from the finalization time and records the cycle it used."""
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["submissions", "create", "--publication-cycle", "2026-11-C0"],
+            ["submissions", "create-local", "--publication-cycle", "2026-11-C0"],
+            [
+                "submissions",
+                "update",
+                "--submission-id",
+                "x",
+                "--publication-cycle",
+                "2026-11-C0",
+            ],
+        ],
+    )
+    def test_flag_is_rejected(self, args: list[str]) -> None:
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 2
+        assert "No such option: --publication-cycle" in result.output
