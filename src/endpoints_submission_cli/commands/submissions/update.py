@@ -47,7 +47,6 @@ def _rollback_update(token: str, submission_id: str, original_run_ids: list[str]
 @click.option(
     "--target-availability-date", default=None, help="Target availability date (YYYY-MM-DD)."
 )
-@click.option("--publication-cycle", default=None, help="Publication cycle (e.g. 2025-04-C1).")
 @click.option(
     "--embargo-date",
     default=None,
@@ -58,7 +57,6 @@ def submissions_update(
     token: str | None,
     run_ids: tuple[str, ...],
     target_availability_date: str | None,
-    publication_cycle: str | None,
     embargo_date: str | None,
 ) -> None:
     """Update fields on an existing submission.
@@ -72,12 +70,7 @@ def submissions_update(
     """
     resolved_token = _get_token(token)
 
-    if (
-        not run_ids
-        and target_availability_date is None
-        and publication_cycle is None
-        and embargo_date is None
-    ):
+    if not run_ids and target_availability_date is None and embargo_date is None:
         _console.print("[yellow]Nothing to update — provide at least one field.[/yellow]")
         return
 
@@ -86,8 +79,6 @@ def submissions_update(
         patch: dict[str, Any] = {}
         if target_availability_date is not None:
             patch["target_availability_date"] = target_availability_date
-        if publication_cycle is not None:
-            patch["publication_cycle"] = publication_cycle
         if embargo_date is not None:
             patch["embargo_date"] = embargo_date
         try:
@@ -130,16 +121,10 @@ def submissions_update(
         )
 
     if not added and not removed:
-        if (
-            target_availability_date is not None
-            or publication_cycle is not None
-            or embargo_date is not None
-        ):
+        if target_availability_date is not None or embargo_date is not None:
             metadata_patch: dict[str, Any] = {}
             if target_availability_date is not None:
                 metadata_patch["target_availability_date"] = target_availability_date
-            if publication_cycle is not None:
-                metadata_patch["publication_cycle"] = publication_cycle
             if embargo_date is not None:
                 metadata_patch["embargo_date"] = embargo_date
             try:
@@ -156,8 +141,6 @@ def submissions_update(
     run_patch: dict[str, Any] = {"run_ids": desired_run_ids}
     if target_availability_date is not None:
         run_patch["target_availability_date"] = target_availability_date
-    if publication_cycle is not None:
-        run_patch["publication_cycle"] = publication_cycle
     if embargo_date is not None:
         run_patch["embargo_date"] = embargo_date
     try:

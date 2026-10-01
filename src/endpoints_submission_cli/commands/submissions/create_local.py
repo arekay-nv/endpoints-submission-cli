@@ -84,11 +84,6 @@ __all__ = ["submissions_create_local"]
     help="Skip the --provisional confirmation prompt (for non-interactive use).",
 )
 @click.option(
-    "--publication-cycle",
-    default=None,
-    help="Target publication cycle (e.g. 2025-04-C1).",
-)
-@click.option(
     "--target-availability-date",
     default=None,
     help="Target availability date (YYYY-MM-DD). Required for preview availability.",
@@ -121,7 +116,6 @@ def submissions_create_local(
     availability: str,
     provisional: bool,
     assume_yes: bool,
-    publication_cycle: str | None,
     target_availability_date: str | None,
     embargo_date: str | None,
     dry_run: bool,
@@ -245,8 +239,6 @@ def submissions_create_local(
             # Wire field is still early_publish — the API schema has not been renamed.
             "early_publish": provisional,
         }
-        if publication_cycle:
-            payload_sub["publication_cycle"] = publication_cycle
         if target_availability_date:
             payload_sub["target_availability_date"] = target_availability_date
         if embargo_date:

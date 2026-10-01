@@ -257,7 +257,6 @@ endpoints-submission-cli submissions create \
   [--token TOKEN] \
   [--provisional] \
   [--yes] \
-  [--publication-cycle CYCLE] \
   [--target-availability-date DATE]
 ```
 
@@ -269,7 +268,6 @@ endpoints-submission-cli submissions create \
 | `--token TOKEN` | no | API token |
 | `--provisional` | no | Request provisional publication (default: false). Results become publicly viewable on the visualizer during the next cohort with a `peer review pending` disclaimer. Prompts for confirmation before submitting |
 | `--yes`, `-y` | no | Skip the `--provisional` confirmation prompt (for non-interactive use) |
-| `--publication-cycle CYCLE` | no | Target cycle, e.g. `2025-04-C1` |
 | `--target-availability-date DATE` | no | `YYYY-MM-DD`; required when availability is `preview` |
 | `--embargo-date DATETIME` | no | Embargo datetime in ISO 8601 format (e.g. `2025-12-01T00:00:00`) |
 | `--dry-run` | no | Assemble folder, run checker, print layout — exit without submitting |
@@ -309,7 +307,6 @@ endpoints-submission-cli submissions update \
 | `--token TOKEN` | API token |
 | `--run-ids RUN_ID` | Set the complete run UUID list. Repeatable — pass once per run. Runs not listed are removed. |
 | `--target-availability-date DATE` | Target availability date (`YYYY-MM-DD`) |
-| `--publication-cycle CYCLE` | Publication cycle (e.g. `2025-04-C1`) |
 | `--embargo-date DATETIME` | Embargo datetime in ISO 8601 format (e.g. `2025-12-01T00:00:00`) |
 
 **When `--run-ids` is provided** the command runs a full rebuild:
