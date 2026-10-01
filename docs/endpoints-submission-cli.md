@@ -70,13 +70,14 @@ Two additional environment variables control where the CLI talks to:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MLPERF_API_BASE_URL(for testing purpose)` | `http://localhost:8080` | Base URL of the PRISM Submission API |
+| `MLPERF_API_BASE_URL` | `https://endpointsapi.mlcommons.org` | Base URL of the PRISM Submission API. Override only for testing, e.g. `http://localhost:8080`. |
 
 Add these to your shell profile for persistent configuration:
 
 ```bash
 export PRISM_USER_API_TOKEN=mlc_your_token_here
-export MLPERF_API_BASE_URL=https://api.mlcommons.org
+# Only to test against a local API; the default is https://endpointsapi.mlcommons.org
+# export MLPERF_API_BASE_URL=http://localhost:8080
 ```
 
 ---
@@ -385,7 +386,7 @@ submission record.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `PRISM_USER_API_TOKEN` | yes* | — | API key for the PRISM Submission API (`mlc_…`). Can be passed per-command with `--token` instead. |
-| `MLPERF_API_BASE_URL` | no | `http://localhost:8080` | Base URL of the PRISM Submission API. |
+| `MLPERF_API_BASE_URL` | no | `https://endpointsapi.mlcommons.org` | Base URL of the PRISM Submission API. |
 
 \* Required unless `--token` is passed.
 
