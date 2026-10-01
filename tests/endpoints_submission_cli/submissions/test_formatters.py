@@ -45,3 +45,28 @@ class TestPrintSubmissionDetail:
         row = next(line for line in out.splitlines() if "Reviewers Assigned" in line)
         assert "0" in row
         assert "—" not in row
+
+    def test_penalties_render_when_present(self, capsys) -> None:
+        print_submission_detail(
+            {**SUBMISSION_OUT, "penalties_imposed": 2, "business_days_since_response": 7}
+        )
+        out = capsys.readouterr().out
+        penalties = next(line for line in out.splitlines() if "Penalties Imposed" in line)
+        waiting = next(line for line in out.splitlines() if "Business Days Waiting" in line)
+        assert "2" in penalties
+        assert "7" in waiting
+
+    def test_zero_penalties_render_as_zero(self, capsys) -> None:
+        print_submission_detail({**SUBMISSION_OUT, "penalties_imposed": 0})
+        out = capsys.readouterr().out
+        row = next(line for line in out.splitlines() if "Penalties Imposed" in line)
+        assert "0" in row
+        assert "—" not in row
+
+    def test_missing_penalties_render_as_dash(self, capsys) -> None:
+        """An API that predates the field must not look like zero penalties."""
+        sub = {k: v for k, v in SUBMISSION_OUT.items() if k != "penalties_imposed"}
+        print_submission_detail(sub)
+        out = capsys.readouterr().out
+        row = next(line for line in out.splitlines() if "Penalties Imposed" in line)
+        assert "—" in row

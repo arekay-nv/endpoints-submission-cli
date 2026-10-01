@@ -78,6 +78,11 @@ def print_submission_detail(submission: dict[str, Any]) -> None:
         ("Target Availability Date", fmt_str(submission.get("target_availability_date"))),
         ("Embargo Date", fmt_dt(submission.get("embargo_date"))),
         ("Reviewers Assigned", fmt_int(submission.get("reviewers_assigned"))),
+        # Non-response penalties from rules §6.3: 1 and 2 each delay publication
+        # by a cycle, 3 withdraws. Waiting time is the longest any one finding
+        # has waited on the submitter, in business days.
+        ("Penalties Imposed", fmt_int(submission.get("penalties_imposed"))),
+        ("Business Days Waiting", fmt_int(submission.get("business_days_since_response"))),
         ("Checker Version", fmt_str(submission.get("submission_checker_version"))),
         ("API Version", fmt_str(submission.get("api_version"))),
         ("CLI Version", fmt_str(submission.get("cli_version"))),
