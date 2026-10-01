@@ -78,15 +78,16 @@ _TPS_UTILIZATION_ABS_TOL = 0.1
 # a new checker. `data/seed_sets.yaml` and `data/approved_drafters.yaml` are the
 # pattern to follow when that is worth doing.
 #
-# `deepseek-v4-pro` is the README's "DeepSeek-V4-Pro (DSV4)", which its example config
-# serves as `deepseek-ai/DeepSeek-V4-Pro-0813`.
+# `deepseek-v4_1-flash` is the README's "DeepSeek-V4.1-Flash", which its example config
+# serves as `deepseek-ai/DeepSeek-V4.1-Flash`. It replaced DeepSeek-V4-Pro
+# (`deepseek-v4-pro`), which is no longer an accepted benchmark model.
 _ALLOWED_MODEL_NAMES = (
     "llama3_1-8b",
     "gpt-oss-120b",
     "deepseek-r1",
     "kimi-k3",
     "qwen3_6-35b-a3b",
-    "deepseek-v4-pro",
+    "deepseek-v4_1-flash",
 )
 
 

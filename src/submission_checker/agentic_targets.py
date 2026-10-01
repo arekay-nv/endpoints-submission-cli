@@ -83,7 +83,7 @@ class AgenticTargets:
 
 # (model-keyword fragments, targets). Reference means from the README, for context:
 # Kimi K3 inline 58.9, OSL 472, SWE-bench 94.83; Qwen inline 56.43, OSL 383,
-# SWE-bench 71.7.
+# SWE-bench 71.7; DeepSeek-V4.1-Flash inline 53.16, OSL 882, SWE-bench 97.5.
 _AGENTIC_TARGETS: list[tuple[frozenset[str], AgenticTargets]] = [
     (
         frozenset({"kimi", "k3"}),
@@ -103,14 +103,16 @@ _AGENTIC_TARGETS: list[tuple[frozenset[str], AgenticTargets]] = [
             osl_range=(344.0, 422.0),
         ),
     ),
-    # "The DSV4 accuracy thresholds and SWE-bench evaluation policy are TBD."
+    # Replaced DeepSeek-V4-Pro, whose thresholds were never published, in the
+    # reference implementation's #519. "v41" rather than "v4" so the retired
+    # `deepseek-v4-pro` is not mistaken for it.
     (
-        frozenset({"deepseek", "v4"}),
+        frozenset({"deepseek", "v41", "flash"}),
         AgenticTargets(
-            name="DSV4",
-            inline_min=None,
-            swebench_min=None,
-            osl_range=None,
+            name="DeepSeek-V4.1-Flash",
+            inline_min=52.36,
+            swebench_min=96.4,
+            osl_range=(793.0, 970.0),
         ),
     ),
 ]
