@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from endpoints_submission_cli._http import get_token
+from endpoints_submission_cli._http import _base_url, get_token
 from endpoints_submission_cli.exceptions import AuthError
 
 
@@ -27,3 +27,15 @@ class TestGetToken:
         monkeypatch.delenv("PRISM_USER_API_TOKEN", raising=False)
         with pytest.raises(AuthError):
             get_token(None)
+
+
+@pytest.mark.unit
+class TestBaseUrl:
+    def test_default_is_the_custom_domain(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Not the generated *.run.app URL, which changes if the service is recreated."""
+        monkeypatch.delenv("MLPERF_API_BASE_URL", raising=False)
+        assert _base_url() == "https://endpointsapi.mlcommons.org"
+
+    def test_env_var_overrides_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MLPERF_API_BASE_URL", "http://localhost:8080")
+        assert _base_url() == "http://localhost:8080"
