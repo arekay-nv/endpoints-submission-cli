@@ -258,14 +258,23 @@ _SEEDS = {
 }
 
 
-def _make_run_yaml(concurrency: int) -> dict:
-    """A §8.3-complete point.yaml, so a test sees only the defect it introduced."""
+#: Sentinel: `point_model_name` defaults to whatever names the model directory.
+_SAME_AS_DIR = "<same as dir>"
+
+
+def _make_run_yaml(concurrency: int, model_name: str | None = "llama3_1-8b") -> dict:
+    """A §8.3-complete point.yaml, so a test sees only the defect it introduced.
+
+    ``model_name`` is a parameter because §8.3 is now the authority for it: §8.2
+    dropped the field, and §8.5 sources the result ID's ``model_id`` from here.
+    Passing ``None`` omits it, for the tests that want it missing.
+    """
     return {
         "concurrency": concurrency,
         "dataset": "llm-perf-dataset-v1",
         "division": "Serviced",
         "max_supported_concurrency": 1024,
-        "model_name": "llama3.1-8b",
+        **({"model_name": model_name} if model_name is not None else {}),
         "model_precision": "FP16",
         "link_to_model": "https://example.com/model",
         "link_to_model_transformation": "https://example.com/quantization",
@@ -307,12 +316,19 @@ def _build_submission(
     write_config_yaml: bool = True,
     accuracy_data: dict | None = None,
     model: str = "llama3-70b",
+    point_model_name: str | None = _SAME_AS_DIR,
 ) -> Path:
     """Build a minimal valid (or deliberately broken) submission directory.
 
     Since policies PR #119 there is no per-system file: the system description is
     written into every ``r<N>/`` alongside the point's own artifacts.
+
+    ``point_model_name`` defaults to *model*, so the point's §8.3 disclosure agrees
+    with the directory §8.1 names after it. Pass a string to make them disagree, or
+    ``None`` to omit the field.
     """
+    if point_model_name is _SAME_AS_DIR:
+        point_model_name = model
     desc = system_desc if system_desc is not None else _SYSTEM_DESC.copy()
     concs = concurrencies if concurrencies is not None else _CONCURRENCIES
 
@@ -332,7 +348,9 @@ def _build_submission(
         if write_system_desc:
             (point_dir / "system_desc.json").write_text(json.dumps(desc))
         if write_runs:
-            (point_dir / "point.yaml").write_text(yaml.dump(_make_run_yaml(c)))
+            (point_dir / "point.yaml").write_text(
+                yaml.dump(_make_run_yaml(c, model_name=point_model_name))
+            )
         if write_results:
             (point_dir / "result_summary.json").write_text(json.dumps(_SUMMARY))
             if write_config_yaml:
@@ -615,59 +633,124 @@ class TestCheckerEdgeCases:
         assert _errors(report, "region-computation")
 
     def test_model_name_matches_dir(self, tmp_path):
-        """ok when model_id in system_desc matches the model directory name."""
-        desc = {**_SYSTEM_DESC, "model_id": "llama3-70b"}
-        root = _build_submission(tmp_path, system_desc=desc, model="llama3-70b")
+        """ok when point.yaml's model_name matches the model directory name."""
+        root = _build_submission(tmp_path, model="llama3-70b")
         report = _check(root)
         ok_results = [r for r in report.results if r.rule == "model-name-consistency" and r.passed]
         assert ok_results
 
     def test_model_name_mismatch_errors(self, tmp_path):
-        """err when model_id in system_desc does not match the model directory name."""
-        desc = {**_SYSTEM_DESC, "model_id": "mistral-7b"}
-        root = _build_submission(tmp_path, system_desc=desc, model="llama3-70b")
+        """err when point.yaml's model_name does not match the model directory name."""
+        root = _build_submission(tmp_path, model="llama3-70b", point_model_name="mistral-7b")
         report = _check(root)
         assert _errors(report, "model-name-consistency")
 
-    def test_model_name_huggingface_format_matches(self, tmp_path):
-        """ok when model_id uses HuggingFace org/name format — last component compared."""
-        desc = {**_SYSTEM_DESC, "model_id": "meta-llama/llama3-70b"}
-        root = _build_submission(tmp_path, system_desc=desc, model="llama3-70b")
+    def test_model_name_huggingface_format_is_not_rewritten(self, tmp_path):
+        """err when model_name keeps a HuggingFace org prefix — names are compared exactly."""
+        root = _build_submission(
+            tmp_path, model="llama3-70b", point_model_name="meta-llama/llama3-70b"
+        )
         report = _check(root)
-        ok_results = [r for r in report.results if r.rule == "model-name-consistency" and r.passed]
-        assert ok_results
+        assert _errors(report, "model-name-consistency")
+
+    def test_system_desc_model_id_is_not_a_fallback(self, tmp_path):
+        """v1.0 reads only §8.3's disclosure — a stale system_desc value decides nothing.
+
+        A point that declares no `model_name` is incomplete, which
+        `point-disclosure-complete` reports; it is not quietly rescued by a value from a
+        file §8.2 no longer defines the field in.
+        """
+        desc = {**_SYSTEM_DESC, "model_id": "mistral-7b"}
+        root = _build_submission(
+            tmp_path, system_desc=desc, model="llama3-70b", point_model_name=None
+        )
+        report = _check(root)
+        assert not _errors(report, "model-name-consistency")
+        assert _warnings(report, "model-name-consistency")
+        assert _errors(report, "point-disclosure-complete")
 
     @pytest.mark.parametrize(
         "model_name",
         [
-            "llama3.1-8b",
+            "llama3_1-8b",
             "gpt-oss-120b",
             "deepseek-r1",
             "kimi-k3",
-            "qwen3.6-35b-a3b",
-            "deepseek-v4.1-flash",
+            "qwen3_6-35b-a3b",
+            "deepseek-v4_1-flash",
         ],
     )
     def test_model_name_allowed_passes(self, tmp_path, model_name):
-        """ok when system_desc.model_name is one of the allowed benchmark models."""
-        desc = {**_SYSTEM_DESC, "model_name": model_name}
-        root = _build_submission(tmp_path, system_desc=desc, model=model_name)
+        """ok when point.yaml's model_name is one of the allowed benchmark models."""
+        root = _build_submission(tmp_path, model=model_name)
         report = _check(root)
         assert not _errors(report, "model-name-valid")
         assert [r for r in report.results if r.rule == "model-name-valid" and r.passed]
 
     def test_model_name_not_allowed_errors(self, tmp_path):
-        """err when system_desc.model_name is not an allowed benchmark model."""
-        desc = {**_SYSTEM_DESC, "model_name": "mistral-7b"}
-        root = _build_submission(tmp_path, system_desc=desc, model="mistral-7b")
+        """err when point.yaml's model_name is not an allowed benchmark model."""
+        root = _build_submission(tmp_path, model="mistral-7b")
         report = _check(root)
         assert _errors(report, "model-name-valid")
 
-    def test_model_name_missing_errors(self, tmp_path):
-        """err when system_desc has no model_name (must be one of the allowed set)."""
-        root = _build_submission(tmp_path, model="llama3-70b")  # _SYSTEM_DESC has no model_name
+    def test_model_name_canonical_llama_passes_both(self, tmp_path):
+        """The canonical spelling is also the directory name, so both checks pass."""
+        root = _build_submission(tmp_path, model="llama3_1-8b")
         report = _check(root)
-        assert _errors(report, "model-name-valid")
+        assert not _errors(report, "model-name-valid")
+        assert not _errors(report, "model-name-consistency")
+
+    def test_model_name_non_canonical_errors_with_hint(self, tmp_path):
+        """A name that only matches once canonicalised fails, and names the fix."""
+        root = _build_submission(tmp_path, model="llama3.1-8b")
+        report = _check(root)
+        errors = _errors(report, "model-name-valid")
+        assert errors
+        assert "write 'llama3_1-8b'" in errors[0].message
+
+    def test_model_name_unrelated_errors_without_hint(self, tmp_path):
+        """No hint when canonicalising does not reach an allowed name either."""
+        root = _build_submission(
+            tmp_path, model="llama3-70b", point_model_name="meta-llama/Llama-3.1-8B"
+        )
+        report = _check(root)
+        errors = _errors(report, "model-name-valid")
+        assert errors
+        assert "write" not in errors[0].message
+
+    def test_system_desc_model_name_no_longer_decides(self, tmp_path):
+        """§8.2 dropped the field, so a stale value there must not fail a valid point.
+
+        This is the regression the move fixes: a correct bundle that omits `model_name`
+        from `system_desc.json` used to be rejected outright.
+        """
+        desc = {**_SYSTEM_DESC, "model_name": "mistral-7b"}
+        root = _build_submission(tmp_path, system_desc=desc, model="gpt-oss-120b")
+        report = _check(root)
+        assert not _errors(report, "model-name-valid")
+
+    def test_model_name_missing_is_a_disclosure_defect(self, tmp_path):
+        """Absence is `point-disclosure-complete`'s report, not a second error here."""
+        root = _build_submission(tmp_path, model="llama3-70b", point_model_name=None)
+        report = _check(root)
+        assert _errors(report, "point-disclosure-complete")
+        assert not [r for r in report.results if r.rule == "model-name-valid"]
+
+    def test_points_disagreeing_on_model_error(self, tmp_path):
+        """§9.1 "Configuration consistency": one curve is one benchmark model."""
+        root = _build_submission(tmp_path, model="gpt-oss-120b")
+        stray = next((root / "results" / "test-sys" / "gpt-oss-120b").glob("r*/point.yaml"))
+        data = yaml.safe_load(stray.read_text())
+        data["model_name"] = "deepseek-r1"
+        stray.write_text(yaml.dump(data))
+        report = _check(root)
+        assert _errors(report, "config-consistency-model")
+
+    def test_consistent_points_pass_the_model_consistency_rule(self, tmp_path):
+        root = _build_submission(tmp_path, model="gpt-oss-120b")
+        report = _check(root)
+        assert not _errors(report, "config-consistency-model")
+        assert [r for r in _check(root).results if r.rule == "config-consistency-model"]
 
     def test_non_point_directory_is_ignored(self, tmp_path):
         """A directory that is not r<digits> is not treated as a Pareto point."""

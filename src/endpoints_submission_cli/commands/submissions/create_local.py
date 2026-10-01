@@ -84,11 +84,6 @@ __all__ = ["submissions_create_local"]
     help="Skip the --provisional confirmation prompt (for non-interactive use).",
 )
 @click.option(
-    "--publication-cycle",
-    default=None,
-    help="Target publication cycle (e.g. 2025-04-C1).",
-)
-@click.option(
     "--target-availability-date",
     default=None,
     help="Target availability date (YYYY-MM-DD). Required for preview availability.",
@@ -121,7 +116,6 @@ def submissions_create_local(
     availability: str,
     provisional: bool,
     assume_yes: bool,
-    publication_cycle: str | None,
     target_availability_date: str | None,
     embargo_date: str | None,
     dry_run: bool,
@@ -138,8 +132,8 @@ def submissions_create_local(
       3. (dry-run exits here)
       4. Register each result directory: parse payload, POST /runs, upload archive.
       5. POST /submissions with all collected run_ids.
-      6. Bundle --path and upload.
-      7. PATCH submission status to REVIEW_PENDING.
+      6. Bundle --path and upload. The submission is left COMPLIANCE_CHECKING; the
+         lifecycle manager moves it to REVIEW_PENDING.
     """
     # Ask before the checker run and any run registration — a declined prompt costs nothing.
     if provisional and not dry_run:
@@ -245,8 +239,6 @@ def submissions_create_local(
             # Wire field is still early_publish — the API schema has not been renamed.
             "early_publish": provisional,
         }
-        if publication_cycle:
-            payload_sub["publication_cycle"] = publication_cycle
         if target_availability_date:
             payload_sub["target_availability_date"] = target_availability_date
         if embargo_date:
@@ -276,15 +268,8 @@ def submissions_create_local(
                 subs_api.withdraw_submission(resolved_token, submission_id)
             sys.exit(1)
 
-        # 7. Update status
-        try:
-            subs_api.update_submission(
-                resolved_token,
-                submission_id,
-                {"status": "REVIEW_PENDING"},
-            )
-        except APIError as exc:
-            _console.print(f"[yellow]Warning: status update failed (retryable):[/yellow] {exc}")
+        # No status update: the lifecycle manager moves the submission from
+        # COMPLIANCE_CHECKING to REVIEW_PENDING once it sees the uploaded bundle.
 
     _console.print(f"[bold green]Submission created:[/bold green] {submission_id}")
 

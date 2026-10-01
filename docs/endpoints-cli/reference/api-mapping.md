@@ -30,7 +30,6 @@ This table maps every CLI command to the API endpoints it calls, in the order th
 | | 2 | POST | `/submissions` | Registers the submission record. |
 | | 3 | POST | `/submissions/{id}/archive` | Uploads the bundle `.tar.gz`. |
 | | (rollback) | DELETE | `/submissions/{id}` | Only on bundle-upload failure, after registration. |
-| | 4 | PATCH | `/submissions/{id}` | Sets `pr_url`, `pr_number`, `status=REVIEW_PENDING`. |
 | `submissions get` | 1 | GET | `/submissions/{id}` | Query param `include_runs=true` by default. |
 | `submissions update` (run-ids) | 1 | GET | `/submissions/{id}` | Fetch current run list and division. |
 | | 2 | PATCH | `/submissions/{id}` | Updates `run_ids` (and any metadata fields). |

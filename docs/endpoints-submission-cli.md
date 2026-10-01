@@ -70,13 +70,14 @@ Two additional environment variables control where the CLI talks to:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MLPERF_API_BASE_URL(for testing purpose)` | `http://localhost:8080` | Base URL of the PRISM Submission API |
+| `MLPERF_API_BASE_URL` | `https://endpointsapi.mlcommons.org` | Base URL of the PRISM Submission API. Override only for testing, e.g. `http://localhost:8080`. |
 
 Add these to your shell profile for persistent configuration:
 
 ```bash
 export PRISM_USER_API_TOKEN=mlc_your_token_here
-export MLPERF_API_BASE_URL=https://api.mlcommons.org
+# Only to test against a local API; the default is https://endpointsapi.mlcommons.org
+# export MLPERF_API_BASE_URL=http://localhost:8080
 ```
 
 ---
@@ -244,7 +245,9 @@ runs. This command runs the full automated workflow:
 3. Run the Submission Checker — aborts if compliance errors are found.
 4. Register the submission with the API (`POST /submissions`).
 5. Upload the submission bundle.
-6. Set status to `REVIEW_PENDING` on the submission record.
+
+The submission stays `COMPLIANCE_CHECKING` until the lifecycle manager hands it to
+review (`REVIEW_PENDING`) on its next run.
 
 ```bash
 endpoints-submission-cli submissions create \
@@ -255,7 +258,6 @@ endpoints-submission-cli submissions create \
   [--token TOKEN] \
   [--provisional] \
   [--yes] \
-  [--publication-cycle CYCLE] \
   [--target-availability-date DATE]
 ```
 
@@ -267,7 +269,6 @@ endpoints-submission-cli submissions create \
 | `--token TOKEN` | no | API token |
 | `--provisional` | no | Request provisional publication (default: false). Results become publicly viewable on the visualizer during the next cohort with a `peer review pending` disclaimer. Prompts for confirmation before submitting |
 | `--yes`, `-y` | no | Skip the `--provisional` confirmation prompt (for non-interactive use) |
-| `--publication-cycle CYCLE` | no | Target cycle, e.g. `2025-04-C1` |
 | `--target-availability-date DATE` | no | `YYYY-MM-DD`; required when availability is `preview` |
 | `--embargo-date DATETIME` | no | Embargo datetime in ISO 8601 format (e.g. `2025-12-01T00:00:00`) |
 | `--dry-run` | no | Assemble folder, run checker, print layout — exit without submitting |
@@ -307,7 +308,6 @@ endpoints-submission-cli submissions update \
 | `--token TOKEN` | API token |
 | `--run-ids RUN_ID` | Set the complete run UUID list. Repeatable — pass once per run. Runs not listed are removed. |
 | `--target-availability-date DATE` | Target availability date (`YYYY-MM-DD`) |
-| `--publication-cycle CYCLE` | Publication cycle (e.g. `2025-04-C1`) |
 | `--embargo-date DATETIME` | Embargo datetime in ISO 8601 format (e.g. `2025-12-01T00:00:00`) |
 
 **When `--run-ids` is provided** the command runs a full rebuild:
@@ -386,7 +386,7 @@ submission record.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `PRISM_USER_API_TOKEN` | yes* | — | API key for the PRISM Submission API (`mlc_…`). Can be passed per-command with `--token` instead. |
-| `MLPERF_API_BASE_URL` | no | `http://localhost:8080` | Base URL of the PRISM Submission API. |
+| `MLPERF_API_BASE_URL` | no | `https://endpointsapi.mlcommons.org` | Base URL of the PRISM Submission API. |
 
 \* Required unless `--token` is passed.
 
@@ -479,7 +479,7 @@ dataset: cnn_dailymail
 # §8.3 disclosure
 division: Standardized
 max_supported_concurrency: 1024
-model_name: llama3.1-8b
+model_name: llama3_1-8b
 model_precision: FP16
 link_to_model: https://example.com/model
 link_to_model_transformation: https://example.com/quantization

@@ -62,6 +62,27 @@ __all__ = ["submissions_create"]
     help="Run UUID(s) to include. Repeatable.",
 )
 @click.option(
+    "--shared-src",
+    "shared_src_dirs",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help=(
+        "Directory whose contents are added to the submission's shared src/ tree. "
+        "Merged in, not nested, so pass a directory holding one or more "
+        "<implementation>/ folders. Repeatable."
+    ),
+)
+@click.option(
+    "--shared-docs",
+    "shared_docs_dirs",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help=(
+        "Directory whose contents are added to the submission's shared docs/ tree. "
+        "Merged in, not nested. Repeatable."
+    ),
+)
+@click.option(
     "--provisional",
     is_flag=True,
     default=False,
@@ -77,11 +98,6 @@ __all__ = ["submissions_create"]
     is_flag=True,
     default=False,
     help="Skip the --provisional confirmation prompt (for non-interactive use).",
-)
-@click.option(
-    "--publication-cycle",
-    default=None,
-    help="Target publication cycle (e.g. 2025-04-C1).",
 )
 @click.option(
     "--target-availability-date",
@@ -112,9 +128,10 @@ def submissions_create(
     scenario: str,
     availability: str,
     run_ids: tuple[str, ...],
+    shared_src_dirs: tuple[Path, ...],
+    shared_docs_dirs: tuple[Path, ...],
     provisional: bool,
     assume_yes: bool,
-    publication_cycle: str | None,
     target_availability_date: str | None,
     embargo_date: str | None,
     dry_run: bool,
@@ -166,7 +183,12 @@ def submissions_create(
         _console.print("[cyan]Assembling submission folder…[/cyan]")
         try:
             submission_dir = build_submission_folder(
-                archives, division, availability, tmp_path / "bundle"
+                archives,
+                division,
+                availability,
+                tmp_path / "bundle",
+                shared_src_dirs=shared_src_dirs,
+                shared_docs_dirs=shared_docs_dirs,
             )
         except SubmissionBuildError as exc:
             _console.print(f"[bold red]Build error:[/bold red] {exc}")
@@ -199,8 +221,6 @@ def submissions_create(
             # Wire field is still early_publish — the API schema has not been renamed.
             "early_publish": provisional,
         }
-        if publication_cycle:
-            payload["publication_cycle"] = publication_cycle
         if target_availability_date:
             payload["target_availability_date"] = target_availability_date
         if embargo_date:
@@ -242,15 +262,8 @@ def submissions_create(
                 _console.print(f"[bold red]Rollback failed:[/bold red] {rb_exc}")
             sys.exit(1)
 
-        # 6. Hand the submission to review. The CLI no longer opens the GitHub PR;
-        #    pr_url / pr_number on the record are set by whatever does.
-        try:
-            subs_api.update_submission(
-                resolved_token,
-                submission_id,
-                {"status": "REVIEW_PENDING"},
-            )
-        except APIError as exc:
-            _console.print(f"[yellow]Warning: status update failed (retryable):[/yellow] {exc}")
+        # The submission stays COMPLIANCE_CHECKING. The lifecycle manager moves it to
+        # REVIEW_PENDING once it sees the uploaded bundle, and stamps compliance_passed_at
+        # then — review deadlines key off that time, so the CLI must not set it.
 
     _console.print(f"[bold green]Submission created:[/bold green] {submission_id}")

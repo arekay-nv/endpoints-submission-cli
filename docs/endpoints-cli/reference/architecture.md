@@ -109,14 +109,7 @@ sequenceDiagram
         CLI->>A: DELETE /submissions/{id}  (rollback)
         CLI-->>U: error + exit 1
     end
-    CLI->>GH: prepare_submission_branch(submission_dir, branch)
-    CLI->>GH: create_pr(submission_id, branch)  →  pr_url, pr_number
-    alt PR creation fails
-        CLI->>A: DELETE /submissions/{id}  (rollback)
-        CLI-->>U: error + exit 1
-    end
-    CLI->>A: PATCH /submissions/{id}  {pr_url, pr_number, status=REVIEW_PENDING}
-    CLI-->>U: Submission created: {id}\nPR: {pr_url}
+    CLI-->>U: Submission created: {id}
 ```
 
 ---
@@ -185,5 +178,5 @@ Exception
 |---|---|---|
 | `benchmark_version` | Derived from `result_summary.git_sha`; falls back to `"unknown"`. Never reads the CLI package's own git hash. | Field in `RunCreate`. |
 | `download_submission_archive` | Function exists in `api_client.py` but is not exported in `__all__` and not called by any command. | `GET /submissions/{id}/archive` defined in spec. |
-| Submission status on create | Set to `REVIEW_PENDING` after PR creation (step 9 of `submissions create`), not at registration time. | `status` is a field on `SubmissionCreate`. |
+| Submission status on create | Left at the API default, `COMPLIANCE_CHECKING`. The lifecycle manager moves it to `REVIEW_PENDING`; the CLI never sets status. | `status` is a field on `SubmissionCreate`. |
 | Rollback on PR failure | Uses `DELETE /submissions/{id}` (withdraw) as the rollback for a failed PR creation. This sets status to `WITHDRAWN`. | Spec defines `DELETE /submissions/{id}` as the withdraw endpoint. |

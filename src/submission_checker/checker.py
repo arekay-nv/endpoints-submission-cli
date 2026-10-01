@@ -37,6 +37,7 @@ from .models import (
 from .models import err as _err
 from .models import ok as _ok
 from .models import warn as _warn
+from .models.file.system_power import overhead_for_cooling
 from .models.loader import (
     load_accuracy_result,
     load_accuracy_scores,
@@ -58,15 +59,35 @@ _TPS_TOLERANCE = 0.01
 _TPS_UTILIZATION_ABS_TOL = 0.1
 
 
-# §2 — the only benchmark models accepted this submission round. system_desc.model_name
-# must match one of these exactly.
+# §3.2 — the benchmark models accepted this submission round. The name is read from
+# each point's `point.yaml` (§8.3): policies PR #130 removed `model_name` from §8.2's
+# `system_desc.json` table and template, and §8.5's Result ID now says `model_id`
+# "Must match `model_name` in `point.yaml` (§8.3)".
+#
+# Every entry is in `layout.canonical_model_name` form, and a declared name must match
+# one exactly: the checker never rewrites what a submitter wrote. The canonical form is
+# also the §8.1 directory name, so `llama3_1-8b` rather than `llama3.1-8b`.
+#
+# The agentic three come from the reference implementation's Agentic Inference
+# example, which §3.2 makes the authority: "The set of supported benchmark models is
+# defined per submission round and maintained in the MLPerf Endpoints reference
+# repository."
+#
+# That sentence also says this list does not belong in a release: §3.2 publishes it
+# "at least 6 weeks before the submission round opens", so a new round should not need
+# a new checker. `data/seed_sets.yaml` and `data/approved_drafters.yaml` are the
+# pattern to follow when that is worth doing.
+#
+# `deepseek-v4_1-flash` is the README's "DeepSeek-V4.1-Flash", which its example config
+# serves as `deepseek-ai/DeepSeek-V4.1-Flash`. It replaced DeepSeek-V4-Pro
+# (`deepseek-v4-pro`), which is no longer an accepted benchmark model.
 _ALLOWED_MODEL_NAMES = (
-    "llama3.1-8b",
+    "llama3_1-8b",
     "gpt-oss-120b",
     "deepseek-r1",
     "kimi-k3",
-    "qwen3.6-35b-a3b",
-    "deepseek-v4.1-flash",
+    "qwen3_6-35b-a3b",
+    "deepseek-v4_1-flash",
 )
 
 
@@ -389,6 +410,45 @@ class SubmissionChecker:
 
         return results
 
+    def _declared_cooling(self, system_dir: Path) -> str | None:
+        """§8.2's ``cooling`` for this system, read from any one of its points.
+
+        The system description is per point since policies PR #119, but §8.2 describes
+        one system, and ``system-description-consistency`` already reports points of a
+        curve that disagree. So the first readable one answers the question.
+
+        §8.2's table lists ``cooling`` as a system field while §8.2.1's template nests
+        it under ``node_types`` — the same table/template disjointness §8.2 has
+        elsewhere — so both placements are read.
+
+        A system whose node types are cooled differently resolves to the *air-cooled*
+        fraction. §4.5.2 says estimation "is done conservatively" and air is the larger
+        overhead, so the mixed case takes the bigger denominator rather than the one
+        that flatters the result.
+        """
+        for desc_path in sorted(system_dir.glob(f"*/r*/{layout.SYSTEM_DESC_JSON}")):
+            try:
+                data = json.loads(desc_path.read_text())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            declared: list[str] = []
+            top = data.get("cooling")
+            if isinstance(top, str) and top.strip():
+                declared.append(top)
+            for node in data.get("node_types") or []:
+                value = node.get("cooling") if isinstance(node, dict) else None
+                if isinstance(value, str) and value.strip():
+                    declared.append(value)
+            fractions = {overhead_for_cooling(value) for value in declared}
+            fractions.discard(None)
+            if len(fractions) > 1:
+                return "air-cooled (mixed node cooling; §4.5.2 estimates conservatively)"
+            if declared:
+                return declared[0]
+        return None
+
     def _load_system_power(self, system_dir: Path) -> tuple[SystemPower | None, list[CheckResult]]:
         """§9.1 "Power descriptor": every system must ship a `system_power.json`.
 
@@ -416,13 +476,23 @@ class SubmissionChecker:
         if power is None:
             return None, results
 
+        # §4.5.2 fixes the overhead fraction by cooling method, and §8.2 already
+        # carries `cooling` — so a submitter should not have to restate it here.
+        # A value declared in system_power.json wins; this only fills a gap.
+        if power.cooling is None and power.overhead_fraction is None:
+            cooling = self._declared_cooling(system_dir)
+            if cooling is not None:
+                power = power.model_copy(update={"cooling": cooling})
+
         kw = power.provisioned_power_kw
         if kw is None:
             results.append(
                 _err(
                     "power-descriptor",
-                    f"{layout.SYSTEM_POWER_JSON} states no provisioned power and no component"
-                    " group it could be derived from (§4.5.2)",
+                    f"{layout.SYSTEM_POWER_JSON} states no provisioned power §4.5.2 could be"
+                    f" derived from: {', '.join(power.missing_groups) or 'no component groups'}."
+                    " Declare provisioned_power_w, the §4.5.2.1 rack-scaling values, or the"
+                    " component groups plus a cooling method",
                     path,
                     "#4.5.2",
                 )
@@ -490,7 +560,7 @@ class SubmissionChecker:
         if system_desc is None or sd_path is None:
             return results
 
-        results.extend(self._check_model_name(system_desc, sd_path))
+        results.extend(self._check_model_name(loaded))
 
         # ── Phase 1b: derive C_min, then the region boundaries ────────────────
         regions, region_results = self._derive_regions(
@@ -514,7 +584,12 @@ class SubmissionChecker:
             results.extend(seed_binding._check_results)
 
         if self._drafters_error is None:
-            benchmark = system_desc.model_name or model_dir.name
+            # §8.3's disclosure names the benchmark; §8.2 no longer carries the field.
+            # The directory is the fallback — §8.1 names it after the same value, so it
+            # is the same answer wherever a point failed to declare one.
+            benchmark = next(
+                (p.config.model_name for p in loaded if p.config.model_name), model_dir.name
+            )
             drafter_binding = DrafterBinding(
                 points=valid_points,
                 approved=self._drafters.get(benchmark, []),
@@ -908,26 +983,49 @@ class SubmissionChecker:
     # Per-curve system-description rules
     # ------------------------------------------------------------------
 
-    def _check_model_name(self, system_desc: SystemDescription, sd_path: Path) -> list[CheckResult]:
-        """§2: ``model_name`` must be one of the accepted benchmark models, exactly."""
-        if system_desc.model_name in _ALLOWED_MODEL_NAMES:
-            return [
-                _ok(
-                    "model-name-valid",
-                    f"model_name {system_desc.model_name!r} is an allowed model",
-                    sd_path,
-                    "#2",
+    def _check_model_name(self, loaded: list[_LoadedPoint]) -> list[CheckResult]:
+        """§3.2: ``model_name`` must be one of the accepted benchmark models, exactly.
+
+        Read from ``point.yaml``, not ``system_desc.json``. §8.2 no longer defines
+        ``model_name`` at all — policies PR #130 removed it from both the table and the
+        template — and §8.5 makes the point's disclosure authoritative: a result ID's
+        ``model_id`` "Must match ``model_name`` in ``point.yaml`` (§8.3)".
+
+        The name must already be canonical (:func:`layout.canonical_model_name`). A
+        name that only matches once canonicalised is still an error, and the message
+        says which spelling to use instead.
+
+        Reported per distinct name rather than per point, so a curve of 32 points does
+        not produce 32 identical lines. Whether the points agree is
+        ``config-consistency-model``'s question; absence is
+        ``point-disclosure-complete``'s, so a point with no name is skipped here rather
+        than reported twice.
+        """
+        seen: dict[str, Path] = {}
+        for point in loaded:
+            name = point.config.model_name
+            if name:
+                seen.setdefault(name, point.yaml_path)
+        if not seen:
+            return []
+        results: list[CheckResult] = []
+        for name, path in seen.items():
+            if name in _ALLOWED_MODEL_NAMES:
+                results.append(
+                    _ok(
+                        "model-name-valid", f"model_name {name!r} is an allowed model", path, "#3.2"
+                    )
                 )
-            ]
-        return [
-            _err(
-                "model-name-valid",
-                f"model_name {system_desc.model_name!r} is not an allowed model; "
-                f"must be exactly one of: {', '.join(_ALLOWED_MODEL_NAMES)}",
-                sd_path,
-                "#2",
-            )
-        ]
+            else:
+                message = (
+                    f"model_name {name!r} is not an allowed model; must be exactly one"
+                    f" of: {', '.join(_ALLOWED_MODEL_NAMES)}"
+                )
+                canonical = layout.canonical_model_name(name)
+                if canonical in _ALLOWED_MODEL_NAMES:
+                    message += f" (write {canonical!r})"
+                results.append(_err("model-name-valid", message, path, "#3.2"))
+        return results
 
     def _check_shared_paths(self, loaded: list[_LoadedPoint]) -> list[CheckResult]:
         """§9.1: each point's ``shared_src`` / ``shared_docs`` must resolve under the root.
