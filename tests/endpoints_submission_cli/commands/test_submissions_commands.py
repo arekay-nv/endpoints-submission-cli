@@ -595,12 +595,13 @@ class TestSubmissionsCreateLocal:
                                         ):
                                             with patch(
                                                 "endpoints_submission_cli.submissions.api.update_submission"
-                                            ):
+                                            ) as mock_update:
                                                 result = self._invoke(sub)
         assert result.exit_code == 0, result.output
         assert SUBMISSION_ID in result.output
         assert mock_create_run.call_count == 2
         mock_create_sub.assert_called_once()
+        mock_update.assert_not_called()
         meta = json.loads((sub / "cli_metadata.json").read_text())
         assert meta["command"] == "create-local"
         assert "cli_version" in meta and "created_at" in meta
@@ -855,7 +856,7 @@ class TestSubmissionsCreate:
                                 ):
                                     with patch(
                                         "endpoints_submission_cli.submissions.api.update_submission"
-                                    ):
+                                    ) as mock_update:
                                         _run_app(
                                             "submissions",
                                             "create",
@@ -870,6 +871,8 @@ class TestSubmissionsCreate:
                                             *_TOKEN_ARGS,
                                         )
         mock_create.assert_called_once()
+        # Status is left COMPLIANCE_CHECKING; the lifecycle manager hands it to review.
+        mock_update.assert_not_called()
         # Without --test, the submission is created as a non-test entry.
         assert mock_create.call_args.args[1]["is_test"] is False
         # The marker lives inside <submission_id>/, not at the organisation level:

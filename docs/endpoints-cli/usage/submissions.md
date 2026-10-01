@@ -10,13 +10,14 @@ itself — `pr_url` and `pr_number` appear in `submissions get` once whatever do
 
 | Status | Set by | Meaning |
 |---|---|---|
-| `REVIEW_PENDING` | `submissions create` (step 9) | Submission created, PR open, awaiting review. |
+| `COMPLIANCE_CHECKING` | `submissions create` | Submission created and bundle uploaded; waiting for the lifecycle manager to hand it to review. |
 | `WITHDRAWN` | `submissions withdraw` | Submission retracted; PR closed, archive deleted. |
 
 Additional statuses set by the review workflow (server-side, not by the CLI):
 
 | Status | Meaning |
 |---|---|
+| `REVIEW_PENDING` | Handed to review by the lifecycle manager, which stamps `compliance_passed_at` at that moment. Review deadlines run from there. |
 | `FINALIZED` | Review complete; submission accepted. |
 | `PUBLISHED` | Results published in the MLPerf leaderboard. |
 
@@ -54,8 +55,10 @@ Create a new submission from one or more registered runs. This command runs the 
 3. Run the Submission Checker — aborts with exit code 1 on compliance errors.
 4. `POST /submissions` to register the submission.
 5. Upload the submission bundle (`POST /submissions/{id}/archive`).
-6. Call `update_submission` internally (`PATCH /submissions/{id}`) to set
-   `status=REVIEW_PENDING`.
+
+The submission is left in `COMPLIANCE_CHECKING`. The lifecycle manager moves it to
+`REVIEW_PENDING` on its next run once it sees the uploaded bundle, and that is the time
+review deadlines are measured from.
 
 The CLI does not open the review pull request. `pr_url` and `pr_number` remain on the
 submission record and are shown by `submissions get` once whatever opens it has set them.
