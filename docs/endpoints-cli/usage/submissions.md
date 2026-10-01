@@ -215,7 +215,7 @@ endpoints-submission-cli submissions get \
 | `--token TOKEN` | no | API key. |
 | `-j` / `--json` | no | Print raw JSON. |
 
-The default table renders every field the API returns for a submission — classification (division, scenario, availability), the `Test Submission` flag, publication cycle and embargo date, `Reviewers Assigned` (a count; the reviewer identities are never exposed by the API), the checker/API/CLI versions, PR references, and the full set of lifecycle timestamps in chronological order. Embedded runs follow in their own table.
+The default table renders every field the API returns for a submission — classification (division, scenario, availability), the `Test Submission` flag, publication cycle and embargo date, `Reviewers Assigned` (a count; the reviewer identities are never exposed by the API), `Penalties Imposed` and `Business Days Waiting` (the non-response penalty level from rules §6.3 — 1 and 2 each delay publication by a cycle, 3 withdraws — and the longest any one finding has waited on the submitter; shown as `—` when the API does not report them), the checker/API/CLI versions, PR references, and the full set of lifecycle timestamps in chronological order. Embedded runs follow in their own table.
 
 **Example:**
 
