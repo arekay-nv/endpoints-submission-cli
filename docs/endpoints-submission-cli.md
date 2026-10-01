@@ -244,7 +244,9 @@ runs. This command runs the full automated workflow:
 3. Run the Submission Checker — aborts if compliance errors are found.
 4. Register the submission with the API (`POST /submissions`).
 5. Upload the submission bundle.
-6. Set status to `REVIEW_PENDING` on the submission record.
+
+The submission stays `COMPLIANCE_CHECKING` until the lifecycle manager hands it to
+review (`REVIEW_PENDING`) on its next run.
 
 ```bash
 endpoints-submission-cli submissions create \

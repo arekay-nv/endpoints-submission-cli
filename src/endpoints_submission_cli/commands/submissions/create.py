@@ -270,15 +270,8 @@ def submissions_create(
                 _console.print(f"[bold red]Rollback failed:[/bold red] {rb_exc}")
             sys.exit(1)
 
-        # 6. Hand the submission to review. The CLI no longer opens the GitHub PR;
-        #    pr_url / pr_number on the record are set by whatever does.
-        try:
-            subs_api.update_submission(
-                resolved_token,
-                submission_id,
-                {"status": "REVIEW_PENDING"},
-            )
-        except APIError as exc:
-            _console.print(f"[yellow]Warning: status update failed (retryable):[/yellow] {exc}")
+        # The submission stays COMPLIANCE_CHECKING. The lifecycle manager moves it to
+        # REVIEW_PENDING once it sees the uploaded bundle, and stamps compliance_passed_at
+        # then — review deadlines key off that time, so the CLI must not set it.
 
     _console.print(f"[bold green]Submission created:[/bold green] {submission_id}")

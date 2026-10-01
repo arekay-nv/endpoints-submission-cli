@@ -138,8 +138,8 @@ def submissions_create_local(
       3. (dry-run exits here)
       4. Register each result directory: parse payload, POST /runs, upload archive.
       5. POST /submissions with all collected run_ids.
-      6. Bundle --path and upload.
-      7. PATCH submission status to REVIEW_PENDING.
+      6. Bundle --path and upload. The submission is left COMPLIANCE_CHECKING; the
+         lifecycle manager moves it to REVIEW_PENDING.
     """
     # Ask before the checker run and any run registration — a declined prompt costs nothing.
     if provisional and not dry_run:
@@ -276,15 +276,8 @@ def submissions_create_local(
                 subs_api.withdraw_submission(resolved_token, submission_id)
             sys.exit(1)
 
-        # 7. Update status
-        try:
-            subs_api.update_submission(
-                resolved_token,
-                submission_id,
-                {"status": "REVIEW_PENDING"},
-            )
-        except APIError as exc:
-            _console.print(f"[yellow]Warning: status update failed (retryable):[/yellow] {exc}")
+        # No status update: the lifecycle manager moves the submission from
+        # COMPLIANCE_CHECKING to REVIEW_PENDING once it sees the uploaded bundle.
 
     _console.print(f"[bold green]Submission created:[/bold green] {submission_id}")
 
