@@ -57,5 +57,6 @@
     "data_parallel": 1,
     "batch": null
   },
+  "cooling": "Air-cooled",
   "tps_utilization": 0.235336
 }

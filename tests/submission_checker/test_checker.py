@@ -13,6 +13,8 @@ from submission_checker import layout
 from submission_checker.checker import SubmissionChecker
 from submission_checker.models import CheckResult, Report, Severity
 
+from .conftest import TEST_SUBMISSIONS
+
 #: The three §9.1 per-region coverage rules. Ultra Low Concurrency is checked
 #: separately against the fixed 1–32 band, so it is not one of these.
 _COVERAGE_RULES = (
@@ -751,3 +753,70 @@ class TestCheckerEdgeCases:
         (stray / "point.yaml").write_text(yaml.dump(_make_run_yaml(64)))
         report = _check(root)
         assert not _warnings(report, "point-dirname-concurrency")
+
+
+# ---------------------------------------------------------------------------
+# Whole-corpus error profile — every fixture fails only where it is meant to
+# ---------------------------------------------------------------------------
+
+#: The exact set of rules each fixture may error on. Anything else is the corpus
+#: rotting against the checker (a schema change the fixtures were not regenerated
+#: for), which used to go unnoticed because the per-rule tests above each look at
+#: one rule only. Regenerate with tests/tools/regenerate_fixtures.py.
+_EXPECTED_ERROR_RULES: dict[str, frozenset[str]] = {
+    "valid_standardized": frozenset(),
+    "sub_a": frozenset(),
+    "sub_b": frozenset(),
+    "sub_i": frozenset(),
+    # Real v0.7-era models outside v1.0's allowed list (§3.2).
+    "sub_c": frozenset({"model-name-valid"}),
+    "sub_d": frozenset({"model-name-valid"}),
+    "sub_e": frozenset({"model-name-valid"}),
+    "sub_f": frozenset({"model-name-valid"}),
+    # Coverage gaps (see _COVERAGE_GAPS); a mandatory region with no point at all
+    # cannot carry accuracy either, so accuracy-coverage fails with it.
+    "sub_g": frozenset(
+        {
+            "model-name-valid",
+            "ultra-low-concurrency-coverage",
+            "low-concurrency-coverage",
+            "accuracy-coverage",
+        }
+    ),
+    "sub_h": frozenset(
+        {
+            "model-name-valid",
+            "ultra-low-concurrency-coverage",
+            "low-concurrency-coverage",
+            "accuracy-coverage",
+        }
+    ),
+    "sub_j": frozenset({"low-concurrency-coverage", "accuracy-coverage"}),
+    # Deliberate violations: 3 points, failed accuracy, too few samples.
+    "invalid_submission": frozenset(
+        {
+            "accuracy-gate",
+            "accuracy-sample-count",
+            "model-name-valid",
+            "point-count",
+            "low-concurrency-coverage",
+            "med-concurrency-coverage",
+            "accuracy-coverage",
+        }
+    ),
+}
+
+
+def test_every_fixture_is_profiled() -> None:
+    on_disk = {p.name for p in TEST_SUBMISSIONS.iterdir() if p.is_dir()}
+    assert on_disk == set(_EXPECTED_ERROR_RULES)
+
+
+@pytest.mark.parametrize(("fixture_name", "expected"), sorted(_EXPECTED_ERROR_RULES.items()))
+def test_fixture_error_profile(request, fixture_name, expected):
+    report = _check(request.getfixturevalue(fixture_name))
+    actual = {r.rule for r in report.results if r.severity == Severity.ERROR}
+    assert actual == expected, (
+        f"{fixture_name}: unexpected {sorted(actual - expected)}, "
+        f"missing {sorted(expected - actual)}"
+    )
