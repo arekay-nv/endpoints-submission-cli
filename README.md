@@ -119,10 +119,6 @@ Everything else is unchanged, which is worth knowing for two cases:
 - Adding a second implementation makes `shared_src` ambiguous, so each `point.yaml`
   must then declare which one produced it. The builder will not guess.
 
-`submissions create-local` has no equivalent flags: it takes an already-assembled tree,
-so `src/` and `docs/` are already in it. It is **deprecated** and will be removed in a
-future release — use `runs create` and `submissions create --run-ids` instead.
-
 ## Command reference
 
 ```

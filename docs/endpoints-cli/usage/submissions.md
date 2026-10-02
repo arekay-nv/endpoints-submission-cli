@@ -115,7 +115,7 @@ from the API plus the version of the CLI running now:
 | `created_at` | when the submission was created (from the API record) |
 
 On `create` the two versions are identical, because that command *is* the creating one.
-`remove-run`, `update` and `create-local` report the creating version from the
+`remove-run` and `update` report the creating version from the
 API alongside their own, so a bundle built by 1.0.0.0 and later amended by 1.2.0.0 shows
 both. `created_at` is the submission's creation time, not the rebuild time.
 
@@ -377,15 +377,3 @@ endpoints-submission-cli submissions remove-run \
   --run-id f7e6d5c4-b3a2-1098-7654-321fedcba098
 # → Run f7e6d5c4 removed from submission a1b2c3d4-…
 ```
-
-## submissions create-local (deprecated)
-
-> **Deprecated — will be removed in a future release.** Register each run with
-> `runs create`, then build the submission with `submissions create --run-ids …`.
-> The command prints this warning every time it runs.
-
-Creates a submission from an already-assembled tree: it registers every
-`results/<system_desc_id>/<benchmark_model>/r<N>/` point as a run, then creates and
-uploads the submission. Each run records the `system_desc_id` and `benchmark_model`
-from its path (on `system_info`), since neither `system_desc.json` nor `config.yaml`
-repeats them.
