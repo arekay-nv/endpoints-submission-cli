@@ -1528,3 +1528,51 @@ class TestNoPublicationCycleFlag:
         result = CliRunner().invoke(app, args)
         assert result.exit_code == 2
         assert "No such option: --publication-cycle" in result.output
+
+
+@pytest.mark.unit
+class TestCreateLocalRunIdentity:
+    """The point's system and model come from its path; record them on the run."""
+
+    @staticmethod
+    def _point(tmp_path: Path, system_desc: dict) -> Path:
+        point = tmp_path / "org" / "results" / "acme_h100x8_001" / "llama3_1-8b" / "r16"
+        point.mkdir(parents=True)
+        (point / "system_desc.json").write_text(json.dumps(system_desc))
+        (point / "result_summary.json").write_text("{}")
+        (point / "config.yaml").write_text("concurrency: 16\n")
+        return point
+
+    def test_identity_is_taken_from_the_path(self, tmp_path: Path) -> None:
+        from endpoints_submission_cli.commands.submissions.create_local import (
+            _parse_result_dir,
+        )
+
+        payload = _parse_result_dir(self._point(tmp_path, {"model_name": "llama3.1-8b"}))
+
+        assert payload["system_info"]["system_desc_id"] == "acme_h100x8_001"
+        assert payload["system_info"]["benchmark_model"] == "llama3_1-8b"
+        assert payload["system_info"]["model_name"] == "llama3.1-8b"
+        assert payload["config"] == {"concurrency": 16}
+
+    def test_values_the_file_declares_are_kept(self, tmp_path: Path) -> None:
+        from endpoints_submission_cli.commands.submissions.create_local import (
+            _parse_result_dir,
+        )
+
+        payload = _parse_result_dir(
+            self._point(
+                tmp_path, {"system_desc_id": "declared", "benchmark_model": "declared-model"}
+            )
+        )
+
+        assert payload["system_info"]["system_desc_id"] == "declared"
+        assert payload["system_info"]["benchmark_model"] == "declared-model"
+
+    def test_deprecation_warning_is_printed(self, tmp_path: Path) -> None:
+        missing = tmp_path / "nope"
+        result = _runner.invoke(
+            app, [*_CREATE_LOCAL_BASE_ARGS, "--path", str(missing), *_TOKEN_ARGS]
+        )
+        assert "deprecated" in result.output
+        assert "submissions create --run-ids" in result.output.replace("\n", " ")

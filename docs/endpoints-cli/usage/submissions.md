@@ -377,3 +377,15 @@ endpoints-submission-cli submissions remove-run \
   --run-id f7e6d5c4-b3a2-1098-7654-321fedcba098
 # → Run f7e6d5c4 removed from submission a1b2c3d4-…
 ```
+
+## submissions create-local (deprecated)
+
+> **Deprecated — will be removed in a future release.** Register each run with
+> `runs create`, then build the submission with `submissions create --run-ids …`.
+> The command prints this warning every time it runs.
+
+Creates a submission from an already-assembled tree: it registers every
+`results/<system_desc_id>/<benchmark_model>/r<N>/` point as a run, then creates and
+uploads the submission. Each run records the `system_desc_id` and `benchmark_model`
+from its path (on `system_info`), since neither `system_desc.json` nor `config.yaml`
+repeats them.

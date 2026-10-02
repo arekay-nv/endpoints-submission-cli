@@ -35,6 +35,13 @@ __all__ = ["submissions_create_local"]
 
 #: A Pareto-point directory: "r" followed by the concurrency level (r1, r32, r256).
 
+#: Printed at the start of every invocation; the command is slated for removal.
+DEPRECATION_WARNING = (
+    "`submissions create-local` is deprecated and will be removed in a future "
+    "release. Register each run with `runs create` and build the submission with "
+    "`submissions create --run-ids ...` instead."
+)
+
 
 @click.command("create-local")
 @click.option(
@@ -121,7 +128,10 @@ def submissions_create_local(
     dry_run: bool,
     is_test: bool,
 ) -> None:
-    """Create a submission from a pre-assembled local folder.
+    """(Deprecated) Create a submission from a pre-assembled local folder.
+
+    Deprecated: will be removed in a future release. Use `runs create` for each run,
+    then `submissions create --run-ids ...`.
 
     Scans results/<system>/<model>/r<N>/ point directories for run data,
     registers each as a run, then creates and uploads the submission bundle.
@@ -135,6 +145,8 @@ def submissions_create_local(
       6. Bundle --path and upload. The submission is left COMPLIANCE_CHECKING; the
          lifecycle manager moves it to REVIEW_PENDING.
     """
+    _console.print(f"[bold yellow]Warning:[/bold yellow] {DEPRECATION_WARNING}")
+
     # Ask before the checker run and any run registration — a declined prompt costs nothing.
     if provisional and not dry_run:
         _confirm_provisional(assume_yes)
@@ -296,6 +308,14 @@ def _parse_result_dir(path: Path) -> dict[str, Any]:
     Like parse_run_folder, but reading from an assembled bundle: since policies
     PR #119 the system description sits in the point directory itself, so the two
     layouts now differ only in which supplementary files are present.
+
+    The point's identity comes from its path, ``results/<system_desc_id>/
+    <benchmark_model>/r<N>/``, which neither system_desc.json nor the (optional,
+    often concurrency-only) config.yaml repeats. Both are recorded on
+    ``system_info`` — ``system_desc_id`` and ``benchmark_model`` — so the run
+    record carries them; without them the lifecycle manager shows "unknown
+    model" and a hash per run in place of the system id. A value the file
+    already declares is kept.
     """
     for fname in (layout.SYSTEM_DESC_JSON, layout.RESULT_SUMMARY_JSON):
         if not (path / fname).exists():
@@ -306,6 +326,11 @@ def _parse_result_dir(path: Path) -> dict[str, Any]:
         system_info = cast(dict[str, Any], json.loads(sd_path.read_text()))
     except json.JSONDecodeError as exc:
         raise RunFolderError(f"Invalid JSON in {sd_path.name}: {exc}") from exc
+    if not isinstance(system_info, dict):
+        raise RunFolderError(f"{sd_path.name} must be a JSON object")
+    model_dir = path.parent
+    system_info.setdefault("system_desc_id", model_dir.parent.name)
+    system_info.setdefault("benchmark_model", model_dir.name)
 
     # config.yaml is optional as of v1.0; an absent one is an empty mapping.
     config: dict[str, Any] = {}

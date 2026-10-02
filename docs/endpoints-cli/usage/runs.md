@@ -61,8 +61,8 @@ A run flagged `--test` shows as `Test Run │ Yes` in `runs get`. It is **not** 
 `runs list`: that view is served by the API's `RunSummary` schema, which does not carry
 `is_test`, so the test marker stays dormant there until the API exposes it.
 
-`submissions create-local --test` sets the same flag on every run it registers, so a test
-submission never leaves untagged runs behind. `submissions create` takes already-registered
+`submissions create-local --test` (deprecated; to be removed) sets the same flag on every
+run it registers, so a test submission never leaves untagged runs behind. `submissions create` takes already-registered
 runs, so flag those at `runs create` time.
 
 **Run folder layout** — the folder must contain:
