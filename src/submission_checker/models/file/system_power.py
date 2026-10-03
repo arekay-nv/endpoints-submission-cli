@@ -114,8 +114,11 @@ class ComponentGroup(BaseModel):
         validation_alias=AliasChoices(
             "tdp_per_unit",
             "tdp_per_cpu",
+            "tdp_per_cpu_watts",
             "tdp_per_accelerator",
+            "tdp_per_accelerator_watts",
             "tdp_per_switch",
+            "tdp_per_switch_watts",
             "tdp_per_compute",
         ),
     )

@@ -671,9 +671,20 @@ class TestCheckerEdgeCases:
         assert _warnings(report, "model-name-consistency")
         assert _errors(report, "point-disclosure-complete")
 
-    def test_model_name_allowed_passes(self, tmp_path):
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "llama3_1-8b",
+            "gpt-oss-120b",
+            "deepseek-r1",
+            "kimi-k3",
+            "qwen3_6-35b-a3b",
+            "deepseek-v4_1-flash",
+        ],
+    )
+    def test_model_name_allowed_passes(self, tmp_path, model_name):
         """ok when point.yaml's model_name is one of the allowed benchmark models."""
-        root = _build_submission(tmp_path, model="gpt-oss-120b")
+        root = _build_submission(tmp_path, model=model_name)
         report = _check(root)
         assert not _errors(report, "model-name-valid")
         assert [r for r in report.results if r.rule == "model-name-valid" and r.passed]

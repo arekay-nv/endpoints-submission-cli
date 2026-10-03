@@ -78,10 +78,15 @@ class WarmupSpec(BaseModel):
     requests_issued: int = Field(ge=0)
     requests_completed: int = Field(ge=0)
     data_source: str = Field(min_length=1)
-    concurrency: int = Field(gt=0)
+    concurrency: int = Field(ge=0)
     initialization_steps: list[str] = Field(default_factory=list)
     logs_retained: bool | None = None
     link_logs: str | None = None
+
+    @property
+    def is_disabled(self) -> bool:
+        """Whether the declaration records no warmup duration or requests."""
+        return self.duration_s == 0 and self.requests_issued == 0 and self.requests_completed == 0
 
     @model_validator(mode="after")
     def _check_completed_le_issued(self) -> WarmupSpec:
@@ -89,6 +94,10 @@ class WarmupSpec(BaseModel):
             raise ValueError(
                 f"requests_completed ({self.requests_completed})"
                 f" > requests_issued ({self.requests_issued})"
+            )
+        if self.concurrency == 0 and not self.is_disabled:
+            raise ValueError(
+                "Warmup concurrency must be positive when duration or requests are nonzero"
             )
         return self
 
@@ -101,8 +110,8 @@ class RuntimeSettings(BaseModel):
             ``"agentic_inference"`` for an agentic benchmark.
         min_duration_ms: Minimum steady-state duration in milliseconds (§6.2).
         min_sample_count: Minimum completed queries required (§6.4). ``None`` = no override.
-        stream_all_chunks: Must be ``True`` for all performance runs to enable per-token timing
-            (§6.5).
+        stream_all_chunks: Whether HTTP workers forward every chunk to the main process.
+            This IPC setting does not determine whether the server streams its response.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -512,6 +521,17 @@ class PointConfig(BaseModel):
         path: Path | None = (info.context or {}).get("yaml_path")
         if self.warmup is None:
             return self  # absence is reported by warmup-present
+        if self.warmup.is_disabled:
+            self._check_results.append(
+                ok(
+                    "warmup-logs-retained",
+                    f"Point {self.concurrency}: no warmup requests;"
+                    " no warmup request logs required",
+                    path,
+                    "#6.3.2",
+                )
+            )
+            return self
         retained = self.warmup.logs_retained
         if retained is True:
             self._check_results.append(
@@ -615,26 +635,18 @@ class PointConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_streaming(self, info: ValidationInfo) -> PointConfig:
-        """§6.5: stream_all_chunks must be True for all performance runs."""
+        """Report client chunk forwarding without inferring server streaming (#91)."""
         path: Path | None = (info.context or {}).get("yaml_path")
-        if not self.runtime_settings.stream_all_chunks:
-            self._check_results.append(
-                err(
-                    "streaming-config",
-                    f"Point {self.concurrency}: stream_all_chunks must be True",
-                    path,
-                    "#6.5",
-                )
+        self._check_results.append(
+            ok(
+                "streaming-config",
+                f"Point {self.concurrency}: stream_all_chunks="
+                f"{self.runtime_settings.stream_all_chunks} controls client IPC forwarding;"
+                " server streaming cannot be verified from this flag",
+                path,
+                "#6.5",
             )
-        else:
-            self._check_results.append(
-                ok(
-                    "streaming-config",
-                    f"Point {self.concurrency}: stream_all_chunks=True",
-                    path,
-                    "#6.5",
-                )
-            )
+        )
         return self
 
     @model_validator(mode="after")
