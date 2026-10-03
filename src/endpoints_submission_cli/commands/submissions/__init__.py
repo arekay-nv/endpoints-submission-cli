@@ -5,7 +5,6 @@
 import click
 
 from .create import submissions_create
-from .create_local import submissions_create_local
 from .get import submissions_get
 from .list import submissions_list
 from .remove_run import submissions_remove_run
@@ -22,7 +21,6 @@ def submissions() -> None:
 
 submissions.add_command(submissions_list)
 submissions.add_command(submissions_create)
-submissions.add_command(submissions_create_local)
 submissions.add_command(submissions_get)
 submissions.add_command(submissions_update)
 submissions.add_command(submissions_withdraw)
