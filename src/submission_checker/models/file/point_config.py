@@ -287,7 +287,7 @@ class PointConfig(BaseModel):
     #: §8.3 speculative-decoding disclosure. Absent when the point used none.
     speculative_decoding: dict[str, object] | None = None
 
-    #: §8.3 / §4.5.3 per-point power normalisation. Both optional.
+    # §8.3 / §4.5.3 per-point power normalisation; documented under Attributes above.
     nodes_used: list[NodesUsed] | None = None
     dp_shortfall: DpShortfall | None = None
 
