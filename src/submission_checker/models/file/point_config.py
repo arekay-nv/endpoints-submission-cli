@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-__all__ = ["PointConfig", "RuntimeSettings", "WarmupSpec"]
+__all__ = ["DpShortfall", "NodesUsed", "PointConfig", "RuntimeSettings", "WarmupSpec"]
 
 from pydantic import (
     BaseModel,
@@ -100,6 +100,35 @@ class WarmupSpec(BaseModel):
                 "Warmup concurrency must be positive when duration or requests are nonzero"
             )
         return self
+
+
+class NodesUsed(BaseModel):
+    """One entry of §8.3's ``nodes_used``: the nodes of one type a point engages.
+
+    The values are not range-checked here. Whether ``nodes`` is a positive whole number
+    within the set's provisioned ``N_s`` is §9.1's "Per-point node declaration" row,
+    which needs ``system_power.json`` and reports as its own check rather than as a
+    schema error that would hide every other defect in the file.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    system_node_ensemble_id: int
+    nodes: int
+
+
+class DpShortfall(BaseModel):
+    """§8.3's ``dp_shortfall``: a point run at fewer replicas than §4.5.3's formula gives.
+
+    §8.3 lists what it declares — "the ``DP`` actually run, the ``DP`` the formula gives,
+    and the reason" — but not the key names, so these are this checker's.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    dp_actual: int
+    dp_formula: int
+    reason: str = Field(min_length=1)
 
 
 class RuntimeSettings(BaseModel):
@@ -222,6 +251,10 @@ class PointConfig(BaseModel):
         shared_docs: Root-relative path to the shared ``docs/`` directory.
         seed_set: Identifier of the bound seed set (§4.6).
         target_cohort: Cohort this submission targets, ``YYYY-MM-C0`` or ``…-C1``.
+        nodes_used: §4.5.3's per-point node declaration, by node type. Absent means
+            the point is normalised by the system's full provisioned power.
+        dp_shortfall: §4.5.3's declaration that a point ran fewer data-parallel
+            replicas than would fit, and why.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -253,6 +286,10 @@ class PointConfig(BaseModel):
 
     #: §8.3 speculative-decoding disclosure. Absent when the point used none.
     speculative_decoding: dict[str, object] | None = None
+
+    # §8.3 / §4.5.3 per-point power normalisation; documented under Attributes above.
+    nodes_used: list[NodesUsed] | None = None
+    dp_shortfall: DpShortfall | None = None
 
     # §8.1 / §9.1, absent from §8.3's table — see _REQUIRED_UNDOCUMENTED_FIELDS.
     shared_src: str | None = None

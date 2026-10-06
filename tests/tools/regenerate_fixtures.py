@@ -35,6 +35,10 @@ What it does, per submission tree:
    0.45 placeholder everywhere, so a model the checker has targets for gets those
    targets' golden reference values and minimum sample count — the corpus then
    exercises a passing accuracy gate rather than skipping it on a parse error.
+10. **Maximal engagement** (§4.5.3). The corpus declared ``TP = PP = EP = DP = 1`` on
+    systems of 4 to 72 accelerators, which engages one of them. A point that is not
+    maximally engaged is given one tensor-parallel replica per node — ``TP`` the node's
+    accelerators, ``DP`` its node count — which keeps names like ``sys_gaudi_dp2`` true.
 
 Run with ``uv run python tests/tools/regenerate_fixtures.py``; ``--check`` exits 1 if
 anything would change, which is what the idempotence test asserts.
@@ -202,6 +206,7 @@ def _regenerate_curve(
             util = round(point_tps / max_tps, 6)
         if util is not None:
             desc["tps_utilization"] = util
+        desc = _maximally_engaged(desc)
         changes += _write_json(point_dir / layout.SYSTEM_DESC_JSON, desc, dry_run=dry_run)
 
         summary = _modernise_summary(summaries[point_dir], legacy_meta)
@@ -265,43 +270,134 @@ def _reference_value(lower: float, upper: float | None) -> float:
 
 
 def _write_system_power(system_dir: Path, desc: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Write the §4.5.2 provisioned-power descriptor for one system.
+    """Write the Appendix E provisioned-power descriptor for one system.
 
     Synthesised from the node counts already in the system description, so the fixture
     corpus carries a self-consistent figure rather than a magic number. Left alone once
-    present: a hand-tuned power file is a legitimate fixture edit.
+    it is in Appendix E form — a hand-tuned power file is a legitimate fixture edit —
+    except for ``cooling``, which E.2 requires to agree with the description and so
+    follows it (step 8 declares cooling where the corpus had none). A descriptor in the
+    pre-Appendix E flat form is rewritten.
     """
     path = system_dir / layout.SYSTEM_POWER_JSON
-    if path.is_file():
-        return []
-
     nodes = desc.get("node_types") or [{}]
     node = nodes[0] if isinstance(nodes[0], dict) else {}
+    cooling = node.get("cooling") or desc.get("cooling") or ""
+    liquid = any(word in cooling.lower() for word in ("liquid", "water", "immersion"))
+    declared_cooling = "liquid" if liquid else "air"
+
+    existing = _read_json(path)
+    if existing is not None and "node_sets" in existing:
+        if existing.get("cooling") == declared_cooling:
+            return []
+        return _write_json(path, {**existing, "cooling": declared_cooling}, dry_run=dry_run)
+
     accelerators = node.get("accelerator_info") or [{}]
     accel = accelerators[0] if isinstance(accelerators[0], dict) else {}
     node_count = int(desc.get("system_node_ensemble_total") or 1)
 
-    # §4.5.2's own field names, so the corpus exercises what a submitter writes.
-    # No overhead_fraction: §4.5.2 derives it from the cooling method, which §8.2's
-    # system description already declares, and the checker reads it from there.
-    power = {
-        "cpu": {
-            "num_cpu": int(node.get("host_processors_per_node") or 2) * node_count,
-            "tdp_per_cpu": 350,
-            "public_specification": "https://example.com/cpu-spec",
-        },
-        "accelerator": {
-            "num_accelerator": int(accel.get("accelerators_per_node") or 8) * node_count,
-            "tdp_per_accelerator": 700,
-            "public_specification": "https://example.com/accelerator-spec",
-        },
-        "scale_up_network": {
-            "num_switches": node_count,
-            "tdp_per_switch": 3500,
-            "public_specification": "https://example.com/switch-spec",
-        },
+    def sourced(watts: float, what: str) -> dict[str, Any]:
+        return {
+            "value_w": watts,
+            "source_type": "vendor_spec",
+            "source": f"https://example.com/{what}",
+        }
+
+    power: dict[str, Any] = {
+        "system_desc_id": system_dir.name,
+        "cooling": declared_cooling,
+        "node_sets": [
+            {
+                "node_set_id": 0,
+                "system_node_ensemble_id": int(node.get("system_node_ensemble_id") or 0),
+                "nodes_provisioned": node_count,
+                "power_method": "component_sum",
+                "components": {
+                    "cpu": {
+                        "model": node.get("host_processor_model_name") or "CPU",
+                        "count_per_node": int(node.get("host_processors_per_node") or 2),
+                        "tdp_per_unit": sourced(350, "cpu-spec"),
+                    },
+                    "accelerator": {
+                        "model": accel.get("accelerator_model_name") or "Accelerator",
+                        "count_per_node": int(accel.get("accelerators_per_node") or 8),
+                        "tdp_per_unit": sourced(700, "accelerator-spec"),
+                    },
+                    "scale_up_network": {
+                        "method": "declared_tdp",
+                        "switch_count": 1,
+                        "tdp_per_switch": sourced(3500, "switch-spec"),
+                    },
+                },
+            }
+        ],
+        "scale_out": {"present": False},
     }
+    if node_count > 1:
+        # Node power is built with the MLC formula, so §4.5.2 requires the NICs counted.
+        nics_per_node, gbps = 8, 400
+        power["scale_out"] = {
+            "present": True,
+            "cabling": "passive",
+            "required_bandwidth_tbps": node_count * nics_per_node * gbps / 1000,
+            "nics": {
+                "count_per_node": nics_per_node,
+                "bandwidth_per_nic_gbps": gbps,
+                "counted": True,
+                "tdp_per_nic": sourced(25, "nic-spec"),
+            },
+            "switches": [
+                {
+                    "model": "NVIDIA Spectrum SN5610",
+                    "count": 1,
+                    "bandwidth_tbps": 51.2,
+                    "power_per_switch": sourced(900, "switch-spec"),
+                }
+            ],
+        }
     return _write_json(path, power, dry_run=dry_run)
+
+
+def _maximally_engaged(desc: dict[str, Any]) -> dict[str, Any]:
+    """Give *desc* one replica per node where §4.5.3's maximal engagement fails.
+
+    A description that already satisfies ``DP = floor(A_provisioned / A_replica)`` is
+    returned unchanged, so a hand-tuned parallelism survives a rerun.
+    """
+    nodes = [n for n in desc.get("node_types") or [] if isinstance(n, dict)]
+    per_node = [
+        sum(int(a.get("accelerators_per_node") or 0) for a in n.get("accelerator_info") or [])
+        for n in nodes
+    ]
+    node_count = sum(int(n.get("number_of_nodes") or 0) for n in nodes)
+    provisioned = sum(
+        int(n.get("number_of_nodes") or 0) * a for n, a in zip(nodes, per_node, strict=True)
+    )
+    if not nodes or provisioned <= 0 or len(set(per_node)) != 1:
+        return desc
+
+    summary = desc.get("config_summary")
+    holder = dict(summary) if isinstance(summary, dict) else desc
+    tp, pp, ep, dp = (
+        int(holder.get(name) or desc.get(name) or 1)
+        for name in ("tensor_parallel", "pipeline_parallel", "expert_parallel", "data_parallel")
+    )
+    replica = tp * pp * ep
+    if replica <= provisioned and dp == provisioned // replica:
+        return desc
+
+    holder.update(
+        tensor_parallel=per_node[0],
+        pipeline_parallel=1,
+        expert_parallel=1,
+        data_parallel=node_count,
+    )
+    out = dict(desc)
+    if isinstance(summary, dict):
+        out["config_summary"] = holder
+    else:
+        out = holder
+    return out
 
 
 def _system_description_for(system_dir: Path, legacy_path: Path) -> dict[str, Any]:

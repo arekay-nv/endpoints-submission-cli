@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 
 import pytest
 from pydantic import ValidationError
@@ -16,7 +15,6 @@ from submission_checker.models.loader import (
     load_accuracy_result,
     load_accuracy_scores,
     load_result_summary,
-    load_system_power,
 )
 
 pytestmark = pytest.mark.unit
@@ -229,41 +227,3 @@ def test_load_pattern_and_client_forwarding_are_independent(
         concurrency > 0 and load_pattern in ("concurrency", "agentic_inference")
     )
     assert "streaming-config" not in errors
-
-
-def test_power_accepts_component_template_names_without_inventing_missing_values(tmp_path):
-    path = tmp_path / "system_power.json"
-    payload = {
-        "cpu": {
-            "num_cpu": 2,
-            "tdp_per_cpu_watts": 200,
-            "public_specification": "https://example.com/cpu",
-        },
-        "accelerator": {"num_accelerator": 4, "tdp_per_accelerator_watts": 500},
-        "scale_up_network": {"num_switches": 1, "tdp_per_switch": 100},
-        "overhead_fraction": 0.3,
-    }
-    path.write_text(json.dumps(payload))
-    model, errors = load_system_power(path)
-    assert model is not None and not errors
-    assert model.cpu.count == 2
-    assert model.cpu.link == "https://example.com/cpu"
-    assert model.derived_power_w == 3250
-    missing = deepcopy(payload)
-    for component in ("cpu", "accelerator", "scale_up_network"):
-        missing[component] = {
-            key: value for key, value in missing[component].items() if not key.startswith("tdp_")
-        }
-    path.write_text(json.dumps(missing))
-    model, errors = load_system_power(path)
-    assert model is not None and not errors
-    assert model.cpu.count == 2
-    assert model.derived_power_w is None
-
-
-def test_power_accepts_provisioned_watts_alias(tmp_path):
-    path = tmp_path / "system_power.json"
-    path.write_text(json.dumps({"provisioned_power_watts": 5000}))
-    model, errors = load_system_power(path)
-    assert model is not None and not errors
-    assert model.provisioned_power_kw == 5

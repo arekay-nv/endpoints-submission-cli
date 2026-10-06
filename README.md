@@ -232,7 +232,7 @@ Pareto point carries its own `system_desc.json`.
     ├── docs/                         # calibration, software disclosure, …
     └── results/
         └── <system>/
-            ├── system_power.json      # §4.5.2 — REQUIRED, one per system
+            ├── system_power.json      # §4.5.2 — one per system; REQUIRED for Standardized
             └── <model_name>/
                 └── r<N>/             # one directory per concurrency level
                     ├── point.yaml            # §8.3 measurement-point disclosure
@@ -271,13 +271,13 @@ submission root (§9.1).
 |------|------|-------------|
 | `system-description-present` | §8.2 | Every point has a `system_desc.json` |
 | `system-description-valid` | §8.2 | It parses against the `SystemDescription` schema |
-| `system-description-consistency` | §8.5 | Every point of a curve describes the same system |
+| `system-description-consistency` | §8.5 | Every point of a curve describes the same system (parallelism, `batch` and `config_summary` may vary by point) |
 | `model-name-valid` | §3.2 | `point.yaml`'s `model_name` is exactly one of the round's supported models, spelled canonically |
 | `model-name-consistency` | §8.1 | It is exactly the results directory name |
 | `max-concurrency-declared` | §7 | `max_supported_concurrency` (C_max) present and > 32 |
 | `tps-utilization` | §8.2 | Equals `system_tps / max(system_tps)` over the point's own curve |
-| `power-descriptor` | §4.5.2 | `system_power.json` present per system and states a power §4.5.2 can derive |
-| `power-estimated` | §4.5.2 | Flags component groups left for MLCommons to auto-populate (warn) |
+| `power-descriptor` | §4.5.2, App. E | `system_power.json` present per system and valid under Appendix E.7; optional for RDI and Serviced |
+| `power-estimated` | §4.5.2, App. D | "MLC Estimated Power": an Appendix D value reaches the total (warn) |
 
 > The benchmark model name is read from **`point.yaml`** (§8.3), and from nowhere else.
 > Policies PR #130 removed `model_name` from §8.2's `system_desc.json` table and template,
@@ -290,37 +290,106 @@ submission root (§9.1).
 > `llama3_1-8b`, `gpt-oss-120b` or `deepseek-r1`. The checker does not rewrite it, so
 > `llama3.1-8b` fails `model-name-valid`, and the error names the spelling to use.
 
-§4.5.2's power model:
+`system_power.json` follows **Appendix E** (policies PR #126 at `0e83c26`): one entry per set of
+identical nodes, and every power figure written as a sourced value —
+`{"value_w": 1100, "source_type": "vendor_spec", "source": "https://..."}`. The source
+types are `vendor_spec`, `publication`, `public_statement` and `mlc_default`; a
+submitter's own assertion is not one, and fails to load.
+
+§4.5.2's power model, as Appendix E.5 computes it:
 
 ```
-System Power     = Major_components + Other_components
-Major_components = CPU_power + Accelerator_power + Network_scale_up_power
-Other_components = overhead_fraction × Major_components
-overhead_fraction = 0.30 liquid-cooled, 0.50 air-cooled
+System Power = Major + Other + Published_node_power + Scale_out_switch_power
+Major        = Σ component_sum sets: nodes × (CPU + Accelerator + Scale-up)
+               + scale-out NICs, where counted
+Other        = overhead_fraction × Major      (0.30 liquid, 0.50 air — from `cooling`)
+Published    = Σ published_system sets: nodes × published node power
+               + Σ node_scaling sets: P_rack × (Y / N)
 ```
 
-`system_power.json` is read with §4.5.2's own field names — `num_cpu`, `tdp_per_cpu`,
-`num_accelerator`, `tdp_per_accelerator`, `num_switches`, `tdp_per_switch`,
-`public_specification` — and with the generic `count` / `tdp_per_unit` / `link`
-spellings, since §4.5.2 publishes names but no JSON schema.
+Details that are easy to get wrong:
 
-Three details are easy to get wrong:
+- **Two terms sit outside the overhead base.** A published node figure already carries
+  that node's cooling and power-supply overhead, and rack switch power is wall power.
+  Scale-out **NICs**, by contrast, are major components and take the overhead.
+- **NICs are counted exactly when node power comes from the formula.** The formula has
+  no NIC term, so a multi-node `component_sum` system must set `nics.counted`; a
+  published node figure is assumed to include them, and counting them again is an
+  error unless `excluded_from_published_power` evidences the exclusion.
+- **On a system mixing both paths, NICs go only on the formula-built nodes.**
+  `nics.counted` is one flag per system, so it cannot say which sets it means; the
+  published sets get NICs too only where `excluded_from_published_power` is given.
+- **`required_bandwidth_tbps` is the NICs' sum (E.4).** Declaring less is an error,
+  since it would admit fewer switches; declaring more is a warning, and the switches
+  must still cover it.
+- **`scale_out.present` must fit the node count (E.4).** `false` on several nodes is
+  an error where nothing joins them (every set built from components with scale-up
+  `none`), and a warning otherwise, since the descriptor cannot show that a scale-up
+  network or a published node spans the nodes. `true` on a single node is a warning.
+- **A declared figure governs, and only its own sourcing tags the result.**
+  `declared_provisioned_power` replaces the computed total; the component block beneath
+  it is a cross-check, so its defaults do not set "MLC Estimated Power" and its gaps do
+  not reject it.
+- **Absent values are filled from Appendix D where one can be chosen mechanically**:
+  accelerator TDP by model (D.3), CPU TDP by architecture and core count (D.2, with the
+  cores read from §8.2's `node_types`), and scale-out NICs and reference switches by
+  cabling (D.4). Scale-up has no fallback, because D.1's two references depend on the
+  link protocol. Anything filled in sets the estimated tag; anything with no default,
+  where it reaches the total, is an error.
+- **`cooling` must agree with §8.2's.** A system description whose node types are
+  cooled differently counts as air-cooled, the conservative reading.
+- **A submitter's `computed` block is checked, not trusted.** Where it disagrees with
+  the recomputation, E.7 rejects the descriptor rather than silently correcting it.
+  `provisioned_power_kw` is rounded once, to two decimal places.
 
-- **Scale-out network is not a major component.** §4.5.2 defines `Other_components` as
-  "scale-out networking, storage, power-supply overhead, and cooling", so a declared
-  scale-out group is already inside the overhead fraction. It is read and reported but
-  never summed into the total, which would count it twice.
-- **`overhead_fraction` comes from the cooling method**, not from the submitter. §8.2's
-  system description already declares `cooling`, so the checker reads it from there
-  (system level or `node_types[]`), and a system with mixed node cooling takes the
-  air-cooled fraction — §4.5.2 estimates conservatively. Where no cooling method can be
-  established and none is declared, that is an **error**, not an assumed zero: dropping
-  `Other_components` shrinks the denominator by 23–33 % and inflates `system_tps_per_kw`.
-- **Three paths give the total**, in §4.5.2's own order of precedence: a declared
-  `provisioned_power_w`, then §4.5.2.1 rack-level node scaling
-  (`rack_power_w × submitted_nodes / rack_nodes`), then the component formula. A
-  combined `compute` group stands in for CPU + accelerator where a vendor publishes
-  them as one figure.
+#### Per-point normalisation (§4.5.3)
+
+Provisioned power is fixed per system, but each point is normalised by the power of the
+**whole nodes it engages**:
+
+```
+point_power_kw = Σ_s P_s × (Y_s / N_s)  +  S × (Σ Y_s / Σ N_s)
+```
+
+`P_s` is node set `s`'s share of provisioned power (overhead and counted NICs included),
+`N_s` its `nodes_provisioned`, and `S` the scale-out switch power. `Y_s` comes from the
+point's optional `nodes_used` in `point.yaml`:
+
+```yaml
+nodes_used:
+  - system_node_ensemble_id: 0
+    nodes: 16
+```
+
+Without `nodes_used` a point is normalised by the full provisioned power, which is also
+always the answer for a single node. Each point must also be **maximally engaged**: its
+own `system_desc.json` must run `DP = floor(A_provisioned / A_replica)` replicas, where
+`A_replica = TP × PP × EP`. A point that runs fewer declares why:
+
+```yaml
+dp_shortfall:
+  dp_actual: 3
+  dp_formula: 4
+  reason: "a fourth TP=16 replica needs one NVLink domain; the remaining 16 GPUs span two"
+```
+
+| Rule | Spec | Description |
+|------|------|-------------|
+| `nodes-used` | §4.5.3, §8.3 | Each entry names exactly one node set, `1 ≤ nodes ≤ N_s`, and the declared nodes hold the accelerators the point's parallelism engages (more than needed is a warning) |
+| `maximal-engagement` | §4.5.3 | `DP = floor(A_provisioned / A_replica)`, or a matching `dp_shortfall` (warned for peer review). Disaggregated serving is left to peer review |
+| `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / point_power_kw` |
+
+Choices the rules leave open, made here conservatively:
+
+- **`declared_provisioned_power` with several node sets** does not split into per-set
+  shares, so it is scaled by the largest engaged fraction of any set. With one set this
+  is exactly §4.5.3's `provisioned_power_kw × (Y / N)`.
+- **Accelerators per node** come from the set's `accelerator.count_per_node`, or from
+  §8.2's `node_types` where the set is on a published path and has no components block.
+- **Heterogeneous systems** declare parallelism for the whole system, so the checker
+  verifies only that the declared nodes together hold the engaged accelerators.
+- **`dp_shortfall` key names** (`dp_actual`, `dp_formula`, `reason`) are this checker's;
+  §8.3 lists the contents but not the names.
 
 ### Regions (§5)
 
@@ -408,7 +477,7 @@ set published after this release.
 | `metric-consistency-system-tps` | §9.1 | Stored `system_tps` matches the derived value |
 | `metric-consistency-tpot-p90` | §9.1 | Reported TPOT P90 present, finite, strictly positive |
 | `metric-consistency-tps-per-user` | §9.1 | Stored `tps_per_user` matches `1000 / tpot_p90_ms` |
-| `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / provisioned_power_kw` |
+| `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / point_power_kw` — see [per-point normalisation](#per-point-normalisation-453) |
 | `agentic-metric-consistency` | §4.1 | `e2e_avg_interactivity` is derivable from its reported inputs |
 
 ### Accuracy (§15)

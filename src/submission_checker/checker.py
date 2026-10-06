@@ -7,7 +7,7 @@ model validators on PointConfig, PointResult, and ModelContext.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 __all__ = ["SubmissionChecker"]
@@ -20,9 +20,12 @@ from .models import (
     DrafterBinding,
     ModelContext,
     ModelDir,
+    Parallelism,
     PointConfig,
+    PointPower,
     PointResult,
     PointSummary,
+    PowerComputation,
     RegionPlacement,
     Regions,
     Report,
@@ -31,13 +34,12 @@ from .models import (
     SrcDir,
     SubmissionDir,
     SystemDescription,
-    SystemPower,
     compute_regions,
 )
 from .models import err as _err
 from .models import ok as _ok
 from .models import warn as _warn
-from .models.file.system_power import overhead_for_cooling
+from .models.file.system_power import AIR_COOLED_OVERHEAD, overhead_for_cooling
 from .models.loader import (
     load_accuracy_result,
     load_accuracy_scores,
@@ -51,9 +53,6 @@ from .seed_sets import SeedSet, SeedSetError, load_seed_sets
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-#: Relative tolerance for stored-vs-derived metric comparisons.
-_TPS_TOLERANCE = 0.01
 
 # Absolute tolerance for the tps_utilization consistency check.
 _TPS_UTILIZATION_ABS_TOL = 0.1
@@ -107,7 +106,32 @@ def _results_has_accuracy_scores(path: Path) -> bool:
 #: Fields of ``system_desc.json`` allowed to differ between points of one curve.
 #: ``tps_utilization`` is a per-point quantity that §8.2 nonetheless places in the
 #: system description — worth raising with the WG, but not a submission defect.
-_PER_POINT_SYSTEM_DESC_FIELDS = frozenset({"tps_utilization"})
+#:
+#: The parallelism fields vary by design: §8.1 calls each point's copy the
+#: "framework/parallelism/precision for this point", and §4.5.3's worked example (C.3)
+#: changes the replica size between points. ``config_summary`` concatenates them, and
+#: ``batch`` is tuned per concurrency like any other server setting.
+_PER_POINT_SYSTEM_DESC_FIELDS = frozenset(
+    {
+        "tps_utilization",
+        "tensor_parallel",
+        "pipeline_parallel",
+        "expert_parallel",
+        "data_parallel",
+        "disaggregated",
+        "batch",
+        "config_summary",
+        "config_summary_notes",
+    }
+)
+
+#: §4.5 scope: "Power normalization applies to all Standardized division submissions
+#: … RDI submissions MAY report normalized throughput but are not required to", and
+#: Serviced normalisation "will be introduced in a later version".
+_POWER_OPTIONAL_DIVISIONS = frozenset({"rdi", "serviced"})
+
+#: §8.2's parallelism fields, read per point for §4.5.3.
+_PARALLELISM_FIELDS = ("tensor_parallel", "pipeline_parallel", "expert_parallel", "data_parallel")
 
 
 @dataclass
@@ -117,6 +141,27 @@ class _LoadedPoint:
     point_dir: Path
     yaml_path: Path
     config: PointConfig
+
+
+@dataclass
+class _SystemFacts:
+    """What the power descriptor is checked against from §8.2's system description.
+
+    Attributes:
+        overhead: The overhead fraction §8.2's ``cooling`` implies, or ``None`` where it
+            names neither liquid nor air.
+        cores: ``host_processor_core_count`` per ``system_node_ensemble_id``, for D.2.
+        ensembles: Every ``system_node_ensemble_id`` the description declares.
+        accelerators: Accelerators per node per ``system_node_ensemble_id`` — §4.5.3's
+            divisor where a node set does not state ``accelerator.count_per_node``.
+        division: The declared division, lower-cased, or ``None`` if unreadable.
+    """
+
+    overhead: float | None
+    cores: dict[int, int]
+    ensembles: set[int]
+    accelerators: dict[int, int]
+    division: str | None
 
 
 def _system_desc_identity(data: dict[str, object]) -> dict[str, object]:
@@ -158,10 +203,52 @@ def _derived_system_tps(summary_path: Path) -> float | None:
     return total / (duration_ns / 1e9)
 
 
+def _accelerators_per_node(node: dict[str, object]) -> int | None:
+    """Accelerators in one §8.2.1 node type, across its ``accelerator_info`` entries.
+
+    v0.7's flat ``accelerators_per_node`` on the node is read where the list is absent,
+    as :class:`~submission_checker.models.NodeType` does.
+    """
+    info = node.get("accelerator_info")
+    entries = info if isinstance(info, list) and info else [node]
+    counts = [e.get("accelerators_per_node") for e in entries if isinstance(e, dict)]
+    ints = [c for c in counts if isinstance(c, int) and not isinstance(c, bool)]
+    return sum(ints) if ints else None
+
+
 def _declared_tps_utilization(system_desc_path: Path) -> float | None:
     """Read ``tps_utilization`` from a point's ``system_desc.json``, or None."""
     data = _read_json(system_desc_path)
     return None if data is None else _as_float(data.get("tps_utilization"))
+
+
+def _point_parallelism(system_desc_path: Path) -> Parallelism | None:
+    """A point's parallelism from its own ``system_desc.json``, or None if it declares none.
+
+    §8.2 places the fields at the top level; the structured ``config_summary`` object
+    is read as a fallback. A field left out is 1 — §8.2 defines "TP=1 means no
+    partitioning" and likewise for the others — but a description with none of them
+    says nothing about its deployment, so it yields ``None`` rather than a guess.
+    """
+    data = _read_json(system_desc_path)
+    if data is None:
+        return None
+    summary = data.get("config_summary")
+    summary = summary if isinstance(summary, dict) else {}
+    values: dict[str, int] = {}
+    for name in _PARALLELISM_FIELDS:
+        value = data.get(name, summary.get(name))
+        if isinstance(value, int) and not isinstance(value, bool):
+            values[name] = value
+    if not values:
+        return None
+    # §8.2: "Indicates whether the system is disaggregated (disaggregated > 1)", while
+    # the model reads it as a bool; either spelling of "yes" counts.
+    flag = data.get("disaggregated", summary.get("disaggregated"))
+    disaggregated = flag is True or (
+        isinstance(flag, int) and not isinstance(flag, bool) and flag > 1
+    )
+    return Parallelism(**values, disaggregated=disaggregated)
 
 
 def _resolve_submission_root(path: Path) -> Path:
@@ -390,7 +477,8 @@ class SubmissionChecker:
         results: list[CheckResult] = []
         system_id = system_dir.name
 
-        power, power_results = self._load_system_power(system_dir)
+        facts = self._system_facts(system_dir)
+        power, power_results = self._load_system_power(system_dir, facts)
         results.extend(power_results)
 
         model_dirs = [d for d in sorted(system_dir.iterdir()) if d.is_dir()]
@@ -410,21 +498,17 @@ class SubmissionChecker:
 
         return results
 
-    def _declared_cooling(self, system_dir: Path) -> str | None:
-        """§8.2's ``cooling`` for this system, read from any one of its points.
+    def _system_facts(self, system_dir: Path) -> _SystemFacts:
+        """What Appendix E needs from §8.2's description of this system.
 
         The system description is per point since policies PR #119, but §8.2 describes
         one system, and ``system-description-consistency`` already reports points of a
         curve that disagree. So the first readable one answers the question.
 
         §8.2's table lists ``cooling`` as a system field while §8.2.1's template nests
-        it under ``node_types`` — the same table/template disjointness §8.2 has
-        elsewhere — so both placements are read.
-
-        A system whose node types are cooled differently resolves to the *air-cooled*
-        fraction. §4.5.2 says estimation "is done conservatively" and air is the larger
-        overhead, so the mixed case takes the bigger denominator rather than the one
-        that flatters the result.
+        it under ``node_types``, so both placements are read. Node types cooled
+        differently resolve to the *air-cooled* fraction: §4.5.2 says estimation "is
+        done conservatively", and air is the larger overhead.
         """
         for desc_path in sorted(system_dir.glob(f"*/r*/{layout.SYSTEM_DESC_JSON}")):
             try:
@@ -437,27 +521,75 @@ class SubmissionChecker:
             top = data.get("cooling")
             if isinstance(top, str) and top.strip():
                 declared.append(top)
+            cores: dict[int, int] = {}
+            ensembles: set[int] = set()
+            accelerators: dict[int, int] = {}
             for node in data.get("node_types") or []:
-                value = node.get("cooling") if isinstance(node, dict) else None
+                if not isinstance(node, dict):
+                    continue
+                value = node.get("cooling")
                 if isinstance(value, str) and value.strip():
                     declared.append(value)
+                ensemble = node.get("system_node_ensemble_id")
+                if isinstance(ensemble, str) and ensemble.strip().isdigit():
+                    ensemble = int(ensemble)  # as NodeType coerces it
+                if isinstance(ensemble, int):
+                    ensembles.add(ensemble)
+                    count = node.get("host_processor_core_count")
+                    if isinstance(count, int):
+                        cores[ensemble] = count
+                    per_node = _accelerators_per_node(node)
+                    if per_node is not None:
+                        accelerators[ensemble] = per_node
             fractions = {overhead_for_cooling(value) for value in declared}
             fractions.discard(None)
             if len(fractions) > 1:
-                return "air-cooled (mixed node cooling; §4.5.2 estimates conservatively)"
-            if declared:
-                return declared[0]
-        return None
+                overhead: float | None = AIR_COOLED_OVERHEAD
+            else:
+                overhead = next(iter(fractions), None)
+            division = data.get("division")
+            return _SystemFacts(
+                overhead=overhead,
+                cores=cores,
+                ensembles=ensembles,
+                accelerators=accelerators,
+                division=division.strip().lower() if isinstance(division, str) else None,
+            )
+        return _SystemFacts(
+            overhead=None, cores={}, ensembles=set(), accelerators={}, division=None
+        )
 
-    def _load_system_power(self, system_dir: Path) -> tuple[SystemPower | None, list[CheckResult]]:
-        """§9.1 "Power descriptor": every system must ship a `system_power.json`.
+    def _load_system_power(
+        self, system_dir: Path, facts: _SystemFacts
+    ) -> tuple[PowerComputation | None, list[CheckResult]]:
+        """§9.1 "Power descriptor": a `system_power.json` per system, valid under E.7.
 
-        Per *system*, not per point — §4.5.3 makes provisioned power a property of the
-        system, constant across its whole curve. It is the one per-system file in
-        §8.1's tree, which policies PR #119 had otherwise emptied.
+        Per *system*, not per point: provisioned power, and each node set's ``P_s`` and
+        ``N_s``, are properties of the system. Each point scales them by the nodes it
+        engages (§4.5.3), which :class:`PointPower` checks.
+
+        Required for Standardized. An RDI or Serviced system may omit it (§4.5's
+        scope); one that supplies it is held to the same schema, since it still
+        produces a published normalised figure.
+
+        The structure is checked when the file loads; this adds the E.7 rules that need
+        the system description, and reports what :meth:`SystemPower.compute` found.
+        Every E.7 finding is a rejection, so each is its own error rather than one
+        summary line.
         """
         results: list[CheckResult] = []
         path = system_dir / layout.SYSTEM_POWER_JSON
+        if not path.is_file() and facts.division in _POWER_OPTIONAL_DIVISIONS:
+            results.append(
+                _ok(
+                    "power-descriptor",
+                    f"No {layout.SYSTEM_POWER_JSON}; power normalisation is not required"
+                    f" for the {facts.division} division",
+                    path,
+                    "#4.5",
+                )
+            )
+            return None, results
         if not path.is_file():
             results.append(
                 _err(
@@ -476,56 +608,74 @@ class SubmissionChecker:
         if power is None:
             return None, results
 
-        # §4.5.2 fixes the overhead fraction by cooling method, and §8.2 already
-        # carries `cooling` — so a submitter should not have to restate it here.
-        # A value declared in system_power.json wins; this only fills a gap.
-        if power.cooling is None and power.overhead_fraction is None:
-            cooling = self._declared_cooling(system_dir)
-            if cooling is not None:
-                power = power.model_copy(update={"cooling": cooling})
-
-        kw = power.provisioned_power_kw
-        if kw is None:
+        if facts.overhead is not None and facts.overhead != power.overhead_fraction:
             results.append(
                 _err(
                     "power-descriptor",
-                    f"{layout.SYSTEM_POWER_JSON} states no provisioned power §4.5.2 could be"
-                    f" derived from: {', '.join(power.missing_groups) or 'no component groups'}."
-                    " Declare provisioned_power_w, the §4.5.2.1 rack-scaling values, or the"
-                    " component groups plus a cooling method",
+                    f"cooling is {power.cooling!r}, but {layout.SYSTEM_DESC_JSON} describes a"
+                    f" system whose overhead fraction is {facts.overhead:g}; E.2 requires"
+                    " them to agree",
                     path,
                     "#4.5.2",
                 )
             )
-            return power, results
+        unknown = sorted({s.system_node_ensemble_id for s in power.node_sets} - facts.ensembles)
+        if facts.ensembles and unknown:
+            results.append(
+                _warn(
+                    "power-descriptor",
+                    f"node_sets name system_node_ensemble_id {unknown}, which"
+                    f" {layout.SYSTEM_DESC_JSON} does not describe",
+                    path,
+                    "#4.5.2",
+                )
+            )
 
-        missing = power.missing_groups
-        if missing:
+        computation = power.compute(facts.cores)
+        for problem in computation.problems:
+            results.append(_err("power-descriptor", problem, path, "#4.5.2"))
+        for warning in computation.warnings:
+            results.append(_warn("power-descriptor", warning, path, "#4.5.2"))
+        kw = computation.provisioned_power_kw
+        if kw is None:
+            return None, results
+        # §4.5.3 divides by accelerators per node; a set on a published path has no
+        # components block, so §8.2's node type supplies it.
+        computation.sets = [
+            s
+            if s.accelerators_per_node is not None
+            else replace(s, accelerators_per_node=facts.accelerators.get(s.system_node_ensemble_id))
+            for s in computation.sets
+        ]
+
+        if computation.estimated:
             results.append(
                 _warn(
                     "power-estimated",
-                    f"{', '.join(missing)} left for MLCommons to auto-populate; §4.5.2"
-                    " triggers the estimated-power tag when a value is not supplied",
+                    "MLC Estimated Power: "
+                    + "; ".join(computation.estimated)
+                    + " — Appendix D values reach provisioned_power_kw",
                     path,
                     "#4.5.2",
                 )
             )
-        results.append(
-            _ok(
-                "power-descriptor",
-                f"Provisioned power {kw:.3f} kW",
-                path,
-                "#4.5.2",
+        if not computation.problems:
+            results.append(
+                _ok(
+                    "power-descriptor",
+                    f"Provisioned power {kw:.2f} kW",
+                    path,
+                    "#4.5.2",
+                )
             )
-        )
-        return power, results
+        return computation, results
 
     # ------------------------------------------------------------------
     # Per benchmark-model orchestration
     # ------------------------------------------------------------------
 
     def _check_model(
-        self, system_id: str, model_dir: Path, power: SystemPower | None = None
+        self, system_id: str, model_dir: Path, power: PowerComputation | None = None
     ) -> list[CheckResult]:
         """Run every check scoped to one Pareto curve (§8.5: one system, one model).
 
@@ -851,7 +1001,7 @@ class SubmissionChecker:
         point: _LoadedPoint,
         regions: Regions | None,
         loaded_points: list[tuple[PointConfig, PointSummary]],
-        power: SystemPower | None = None,
+        power: PowerComputation | None = None,
     ) -> list[CheckResult]:
         """Run the per-point rules that need the curve's regions or its result summary.
 
@@ -891,46 +1041,18 @@ class SubmissionChecker:
         )
         results.extend(point_result._check_results)
         loaded_points.append((point.config, summary))
-        results.extend(self._check_tps_per_kw(point, summary, power))
-        return results
-
-    def _check_tps_per_kw(
-        self, point: _LoadedPoint, summary: PointSummary, power: SystemPower | None
-    ) -> list[CheckResult]:
-        """§4.5.3: ``system_tps_per_kw = system_tps / provisioned_power_kw``.
-
-        The denominator is the system's provisioned power, constant across the curve —
-        §4.5.3 is explicit that a low-concurrency point leaving most of the system idle
-        is still normalised by the full figure.
-        """
-        if power is None:
-            return []
-        kw = power.provisioned_power_kw
-        if kw is None or kw <= 0:
-            return []
-        derived = summary.system_tps / kw
-        stored = (summary.model_extra or {}).get("system_tps_per_kw")
-        path = point.point_dir / layout.RESULT_SUMMARY_JSON
-        if stored is not None:
-            rel_err = abs(float(stored) - derived) / max(abs(derived), 1e-9)
-            if rel_err > _TPS_TOLERANCE:
-                return [
-                    _err(
-                        "metric-consistency-tps-per-kw",
-                        f"stored system_tps_per_kw {float(stored):.4f} ≠ derived"
-                        f" system_tps / {kw:.3f} kW = {derived:.4f} (rel err {rel_err:.1%})",
-                        path,
-                        "#4.5.3",
-                    )
-                ]
-        return [
-            _ok(
-                "metric-consistency-tps-per-kw",
-                f"system_tps_per_kw={derived:.4f} ({summary.system_tps:.3f} / {kw:.3f} kW)",
-                path,
-                "#4.5.3",
+        if power is not None:
+            point_power = PointPower(
+                config=point.config,
+                power=power,
+                parallelism=_point_parallelism(point.point_dir / layout.SYSTEM_DESC_JSON),
+                system_tps=summary.system_tps,
+                stored_tps_per_kw=_as_float((summary.model_extra or {}).get("system_tps_per_kw")),
+                yaml_path=point.yaml_path,
+                summary_path=summary_path,
             )
-        ]
+            results.extend(point_power._check_results)
+        return results
 
     def _load_curve_accuracy(
         self, loaded: list[_LoadedPoint]
