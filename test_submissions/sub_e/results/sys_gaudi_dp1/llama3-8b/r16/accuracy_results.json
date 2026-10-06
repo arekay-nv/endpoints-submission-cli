@@ -1,9 +1,15 @@
 {
-  "metric": "cnn_dailymail_validation",
-  "score": 0.45,
-  "quality_target": 0.43,
-  "passed": true,
-  "num_samples": 500,
-  "extractor": "RougeExtractor",
-  "n_repeats": 1
+  "cnn_dailymail_validation": {
+    "dataset_name": "cnn_dailymail_validation",
+    "num_samples": 13368,
+    "score": {
+      "rouge1": 38.7792,
+      "rouge2": 15.9075,
+      "rougel": 24.4957,
+      "rougelsum": 35.793,
+      "gen_len": 8167644.0
+    },
+    "extractor": "RougeExtractor",
+    "n_repeats": 1
+  }
 }

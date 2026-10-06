@@ -1,6 +1,6 @@
 {
   "system_desc_id": "sys_gb300_72gpu",
-  "cooling": "air",
+  "cooling": "liquid",
   "node_sets": [
     {
       "node_set_id": 0,

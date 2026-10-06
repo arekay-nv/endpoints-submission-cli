@@ -119,9 +119,6 @@ Everything else is unchanged, which is worth knowing for two cases:
 - Adding a second implementation makes `shared_src` ambiguous, so each `point.yaml`
   must then declare which one produced it. The builder will not guess.
 
-`submissions create-local` has no equivalent flags: it takes an already-assembled tree,
-so `src/` and `docs/` are already in it.
-
 ## Command reference
 
 ```
@@ -176,6 +173,40 @@ directory below it; a submission root is the level holding `results/` and `docs/
 | `--approved-drafters FILE` | Published approved drafters (§2.9.4). Defaults to the bundled list; also settable via `$MLPERF_ENDPOINTS_APPROVED_DRAFTERS`. |
 
 **Exit codes:** `0` = all checks passed, `1` = one or more errors (or warnings with `--strict`).
+
+### Native client reports and disabled warmup
+
+The checker accepts the client's native accuracy report, including when
+`accuracy_scores` is embedded in `results.json`:
+
+```json
+{"accuracy_scores": [{"dataset_name": "swe_bench", "score": 0.935,
+                      "unit_samples": 200, "num_repeats": 1}]}
+```
+
+Entries are checked separately by dataset name. Legacy dataset-keyed mappings
+remain supported. Native `unit_samples` and `num_repeats` feed the existing
+sample-count and repeat checks; a report-level `average_accuracy` does not
+replace per-dataset scores. Model recognition does not supply missing accuracy
+thresholds or approve speculative-decoding drafters.
+
+Summary percentile keys such as `"90"` and `"90.0"` are equivalent. Conflicting
+values for equivalent keys are rejected. Parsing never rewrites measured files.
+
+For a run with no warmup, declare:
+
+```yaml
+warmup:
+  duration_s: 0
+  requests_issued: 0
+  requests_completed: 0
+  data_source: "none; warmup disabled"
+  concurrency: 0
+```
+
+Zero concurrency is accepted only when all three duration/request values are
+zero. Such a declaration needs no warmup request logs. Active warmup still
+requires positive concurrency and retains the log-disclosure checks.
 
 ### Show region boundaries
 
@@ -381,14 +412,14 @@ not satisfy High Concurrency coverage.
 | `point-config-valid` | §8.3 | `point.yaml` parses against the `PointConfig` schema |
 | `point-disclosure-complete` | §8.3 | Every required §8.3 disclosure field is present |
 | `load-pattern` | §6.1 | `load_pattern` is `concurrency` or `agentic_inference`, with a positive level |
-| `streaming-config` | §6.5 | `stream_all_chunks` is `True` |
+| `streaming-config` | §6.5 | Reports client IPC chunk forwarding; either flag value is accepted and neither proves server streaming |
 | `point-duration` | §6.2 | Steady-state window's issue-time span meets the region minimum (warn) |
 | `steady-state-valid` | §4.4 | `status`, `verdict` and gating `state` use the spec's vocabulary |
 | `steady-state-consistency` | §4.4 | The reported status agrees with the window it describes |
 | `steady-state-basis` | §4.4 | Which basis supplies the official result; flags fallbacks and drift (warn) |
 | `min-query-count` | §6.4 | `n_samples_completed` meets the dataset minimum |
-| `warmup-present` | §6.3.3 | Warmup declaration present |
-| `warmup-logs-retained` | §6.3.2 | Warmup log retention declared (warn) |
+| `warmup-present` | §6.3.3 | Warmup declaration present; concurrency zero is valid only with zero duration and request counts |
+| `warmup-logs-retained` | §6.3.2 | Warmup log retention declared when warmup was performed (warn) |
 | `warmup-salt` | §6.3.3 | Warns when the warmup salt is enabled |
 | `config-consistency-dataset` | §9.1 | All points use the same dataset |
 | `config-consistency-model` | §9.1 | All points declare the same `model_name` |
@@ -490,9 +521,10 @@ The OSL field is resolved explicitly and never falls back to the windowed
 `output_sequence_lengths` block, which has the same shape and a different value.
 
 Thresholds come from the reference implementation's Agentic Inference example, which
-§3.2 makes the authority. DeepSeek-V4-Pro (`deepseek-v4-pro`) is a recognised model
-whose thresholds are still TBD there, so it is reported as ungateable rather than passed
-silently.
+§3.2 makes the authority. All three agentic models — Kimi K3 (`kimi-k3`),
+Qwen3.6-35B-A3B (`qwen3_6-35b-a3b`) and DeepSeek-V4.1-Flash (`deepseek-v4_1-flash`) —
+have published thresholds. A recognised model whose thresholds are TBD there would be
+reported as ungateable rather than passed silently.
 
 Both agentic scorers report a fraction in [0, 1], which is always rescaled to a
 percentage; a value outside that range is an error, never read as a percentage already.

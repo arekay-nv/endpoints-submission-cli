@@ -100,11 +100,6 @@ __all__ = ["submissions_create"]
     help="Skip the --provisional confirmation prompt (for non-interactive use).",
 )
 @click.option(
-    "--publication-cycle",
-    default=None,
-    help="Target publication cycle (e.g. 2025-04-C1).",
-)
-@click.option(
     "--target-availability-date",
     default=None,
     help="Target availability date (YYYY-MM-DD). Required for preview availability.",
@@ -137,7 +132,6 @@ def submissions_create(
     shared_docs_dirs: tuple[Path, ...],
     provisional: bool,
     assume_yes: bool,
-    publication_cycle: str | None,
     target_availability_date: str | None,
     embargo_date: str | None,
     dry_run: bool,
@@ -227,8 +221,6 @@ def submissions_create(
             # Wire field is still early_publish — the API schema has not been renamed.
             "early_publish": provisional,
         }
-        if publication_cycle:
-            payload["publication_cycle"] = publication_cycle
         if target_availability_date:
             payload["target_availability_date"] = target_availability_date
         if embargo_date:
@@ -270,15 +262,8 @@ def submissions_create(
                 _console.print(f"[bold red]Rollback failed:[/bold red] {rb_exc}")
             sys.exit(1)
 
-        # 6. Hand the submission to review. The CLI no longer opens the GitHub PR;
-        #    pr_url / pr_number on the record are set by whatever does.
-        try:
-            subs_api.update_submission(
-                resolved_token,
-                submission_id,
-                {"status": "REVIEW_PENDING"},
-            )
-        except APIError as exc:
-            _console.print(f"[yellow]Warning: status update failed (retryable):[/yellow] {exc}")
+        # The submission stays COMPLIANCE_CHECKING. The lifecycle manager moves it to
+        # REVIEW_PENDING once it sees the uploaded bundle, and stamps compliance_passed_at
+        # then — review deadlines key off that time, so the CLI must not set it.
 
     _console.print(f"[bold green]Submission created:[/bold green] {submission_id}")

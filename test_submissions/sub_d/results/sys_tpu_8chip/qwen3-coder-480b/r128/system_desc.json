@@ -55,5 +55,6 @@
     "data_parallel": 1,
     "batch": null
   },
+  "cooling": "Liquid-cooled",
   "tps_utilization": 0.493003
 }

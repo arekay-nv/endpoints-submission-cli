@@ -10,13 +10,14 @@ itself — `pr_url` and `pr_number` appear in `submissions get` once whatever do
 
 | Status | Set by | Meaning |
 |---|---|---|
-| `REVIEW_PENDING` | `submissions create` (step 9) | Submission created, PR open, awaiting review. |
+| `COMPLIANCE_CHECKING` | `submissions create` | Submission created and bundle uploaded; waiting for the lifecycle manager to hand it to review. |
 | `WITHDRAWN` | `submissions withdraw` | Submission retracted; PR closed, archive deleted. |
 
 Additional statuses set by the review workflow (server-side, not by the CLI):
 
 | Status | Meaning |
 |---|---|
+| `REVIEW_PENDING` | Handed to review by the lifecycle manager, which stamps `compliance_passed_at` at that moment. Review deadlines run from there. |
 | `FINALIZED` | Review complete; submission accepted. |
 | `PUBLISHED` | Results published in the MLPerf leaderboard. |
 
@@ -54,8 +55,10 @@ Create a new submission from one or more registered runs. This command runs the 
 3. Run the Submission Checker — aborts with exit code 1 on compliance errors.
 4. `POST /submissions` to register the submission.
 5. Upload the submission bundle (`POST /submissions/{id}/archive`).
-6. Call `update_submission` internally (`PATCH /submissions/{id}`) to set
-   `status=REVIEW_PENDING`.
+
+The submission is left in `COMPLIANCE_CHECKING`. The lifecycle manager moves it to
+`REVIEW_PENDING` on its next run once it sees the uploaded bundle, and that is the time
+review deadlines are measured from.
 
 The CLI does not open the review pull request. `pr_url` and `pr_number` remain on the
 submission record and are shown by `submissions get` once whatever opens it has set them.
@@ -70,7 +73,6 @@ endpoints-submission-cli submissions create \
   [--token TOKEN] \
   [--provisional] \
   [--yes] \
-  [--publication-cycle CYCLE] \
   [--target-availability-date DATE] \
   [--embargo-date DATETIME] \
   [--dry-run]
@@ -85,10 +87,11 @@ endpoints-submission-cli submissions create \
 | `--token TOKEN` | no | API key. |
 | `--provisional` | no | Request provisional publication (default: false). Results become publicly viewable on the visualizer during the next cohort with a `peer review pending` disclaimer. Prompts for confirmation before submitting. |
 | `--yes`, `-y` | no | Skip the `--provisional` confirmation prompt (for non-interactive use). |
-| `--publication-cycle CYCLE` | no | Target publication cycle, e.g. `2025-04-C1`. |
 | `--target-availability-date DATE` | no | Target availability date (`YYYY-MM-DD`). Required when `--availability preview`. |
 | `--embargo-date DATETIME` | no | Embargo datetime in ISO 8601 format, e.g. `2025-12-01T00:00:00`. |
 | `--dry-run` | no | Assemble folder and run checker, then print the folder layout and exit without creating the submission or PR. |
+
+There is no publication-cycle flag. Nobody picks a cycle at submit time: the lifecycle manager publishes a finalized submission on the first publication date after it is finalized, later if it is under embargo or carries non-response penalties, and records the cycle it published in.
 
 **`cli_metadata.json`** is written inside the `<submission_id>/` directory of every bundle
 (not at the organisation level, which is shared across submissions). It records which CLI
@@ -112,7 +115,7 @@ from the API plus the version of the CLI running now:
 | `created_at` | when the submission was created (from the API record) |
 
 On `create` the two versions are identical, because that command *is* the creating one.
-`remove-run`, `update` and `create-local` report the creating version from the
+`remove-run` and `update` report the creating version from the
 API alongside their own, so a bundle built by 1.0.0.0 and later amended by 1.2.0.0 shows
 both. `created_at` is the submission's creation time, not the rebuild time.
 
@@ -215,7 +218,7 @@ endpoints-submission-cli submissions get \
 | `--token TOKEN` | no | API key. |
 | `-j` / `--json` | no | Print raw JSON. |
 
-The default table renders every field the API returns for a submission — classification (division, scenario, availability), the `Test Submission` flag, publication cycle and embargo date, `Reviewers Assigned` (a count; the reviewer identities are never exposed by the API), the checker/API/CLI versions, PR references, and the full set of lifecycle timestamps in chronological order. Embedded runs follow in their own table.
+The default table renders every field the API returns for a submission — classification (division, scenario, availability), the `Test Submission` flag, `Published In Cycle` (blank until the lifecycle manager publishes the submission) and embargo date, `Reviewers Assigned` (a count; the reviewer identities are never exposed by the API), `Penalties Imposed` and `Business Days Waiting` (the non-response penalty level from rules §6.3 — 1 and 2 each delay publication by a cycle, 3 withdraws — and the longest any one finding has waited on the submitter; shown as `—` when the API does not report them), the checker/API/CLI versions, PR references, and the full set of lifecycle timestamps in chronological order. Embedded runs follow in their own table.
 
 **Example:**
 
@@ -238,7 +241,6 @@ endpoints-submission-cli submissions update \
   [--token TOKEN] \
   [--run-ids RUN_ID ...] \
   [--target-availability-date DATE] \
-  [--publication-cycle CYCLE] \
   [--embargo-date DATETIME]
 ```
 
@@ -248,7 +250,6 @@ endpoints-submission-cli submissions update \
 | `--token TOKEN` | no | API key. |
 | `--run-ids RUN_ID` | no (repeatable) | Replace the complete run list. Pass once per run. Runs not listed are removed. |
 | `--target-availability-date DATE` | no | Target availability date (`YYYY-MM-DD`). |
-| `--publication-cycle CYCLE` | no | Publication cycle (e.g. `2025-04-C1`). |
 | `--embargo-date DATETIME` | no | Embargo datetime in ISO 8601 format. |
 
 Providing no flags prints a warning and makes no API call.
@@ -290,10 +291,9 @@ endpoints-submission-cli submissions update \
   --submission-id a1b2c3d4-… \
   --target-availability-date 2025-10-01
 
-# Update publication cycle and embargo date
+# Update the embargo date
 endpoints-submission-cli submissions update \
   --submission-id a1b2c3d4-… \
-  --publication-cycle 2025-04-C1 \
   --embargo-date 2025-12-01T00:00:00
 
 # Combine run list update with metadata update

@@ -26,10 +26,19 @@ What it does, per submission tree:
 6. **Stale artifacts removed** — ``results_summary.json`` and ``point_<N>.yaml`` from
    the pre-``r<N>`` naming.
 7. **``valid_standardized`` point repair** — see :data:`POINT_RENAMES`.
-8. **Maximal engagement** (§4.5.3). The corpus declared ``TP = PP = EP = DP = 1`` on
-   systems of 4 to 72 accelerators, which engages one of them. A point that is not
-   maximally engaged is given one tensor-parallel replica per node — ``TP`` the node's
-   accelerators, ``DP`` its node count — which keeps names like ``sys_gaudi_dp2`` true.
+8. **§8.2 ``cooling`` declared** on every system description that lacks one. §4.5.2
+   derives the power overhead fraction from it, so without it no provisioned power
+   can be computed from the component groups in ``system_power.json``.
+9. **``accuracy_results.json`` in the per-dataset shape.** v0.7 wrote one flat object
+   (``metric``, ``score``, ``quality_target``, ``passed``); the checker reads
+   ``{dataset: {dataset_name, num_samples, score, ...}}``. The v0.7 scores were a
+   0.45 placeholder everywhere, so a model the checker has targets for gets those
+   targets' golden reference values and minimum sample count — the corpus then
+   exercises a passing accuracy gate rather than skipping it on a parse error.
+10. **Maximal engagement** (§4.5.3). The corpus declared ``TP = PP = EP = DP = 1`` on
+    systems of 4 to 72 accelerators, which engages one of them. A point that is not
+    maximally engaged is given one tensor-parallel replica per node — ``TP`` the node's
+    accelerators, ``DP`` its node count — which keeps names like ``sys_gaudi_dp2`` true.
 
 Run with ``uv run python tests/tools/regenerate_fixtures.py``; ``--check`` exits 1 if
 anything would change, which is what the idempotence test asserts.
@@ -49,6 +58,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from submission_checker import layout  # noqa: E402
+from submission_checker.accuracy_targets import get_thresholds  # noqa: E402
 from submission_checker.seed_sets import load_seed_sets  # noqa: E402
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "test_submissions"
@@ -95,6 +105,14 @@ _ACCELERATOR_FIELDS = (
     "accelerator_interconnect",
     "accelerator_host_interconnect",
 )
+
+#: §8.2 ``cooling`` for a system that declares none, by accelerator. The corpus is
+#: synthetic, so this is the platform's usual cooling rather than a disclosed fact:
+#: GB300 NVL72 racks and TPU v5p pods are liquid-cooled; the 8- and 16-GPU MI355X,
+#: Gaudi 3 and H100/H200 SXM boxes here are air-cooled, like ``valid_standardized``.
+_LIQUID_COOLED_ACCELERATORS = ("GB300", "TPU")
+_AIR_COOLED = "Air-cooled"
+_LIQUID_COOLED = "Liquid-cooled"
 
 #: Stale filenames from the pre-``r<N>`` layout, deleted wherever they appear.
 _STALE_GLOBS = ("results_summary.json", "point_*.yaml", "run_metadata.json")
@@ -195,7 +213,55 @@ def _regenerate_curve(
         changes += _write_json(point_dir / layout.RESULT_SUMMARY_JSON, summary, dry_run=dry_run)
 
         changes += _write_point_yaml(point_dir, concurrency, base_desc, seed_set, dry_run=dry_run)
+
+        changes += _modernise_accuracy(point_dir, model_dir.name, dry_run=dry_run)
     return changes
+
+
+# ---------------------------------------------------------------------------
+# accuracy_results.json
+# ---------------------------------------------------------------------------
+
+
+def _modernise_accuracy(point_dir: Path, model: str, *, dry_run: bool) -> list[str]:
+    """Rewrite a v0.7 flat ``accuracy_results.json`` in the per-dataset shape.
+
+    Recognised by its top-level ``metric`` key naming the dataset; a file already in
+    the per-dataset shape has only dict values and is left alone, which is what makes
+    a second run a no-op.
+    """
+    path = point_dir / "accuracy_results.json"
+    legacy = _read_json(path)
+    if legacy is None or not isinstance(legacy.get("metric"), str):
+        return []
+
+    dataset = legacy["metric"]
+    entry: dict[str, Any] = {"dataset_name": dataset}
+    targets = get_thresholds(model)
+    if targets is not None:
+        thresholds, min_queries = targets
+        entry["num_samples"] = max(int(legacy.get("num_samples") or 0), min_queries)
+        entry["score"] = {
+            metric: _reference_value(lower, upper) for metric, (lower, upper) in thresholds.items()
+        }
+    else:
+        entry["num_samples"] = legacy.get("num_samples")
+        entry["score"] = legacy.get("score")
+    for key in ("extractor", "n_repeats"):
+        if legacy.get(key) is not None:
+            entry[key] = legacy[key]
+    return _write_json(path, {dataset: entry}, dry_run=dry_run)
+
+
+def _reference_value(lower: float, upper: float | None) -> float:
+    """The golden value a threshold was derived from.
+
+    accuracy_targets states floors as ``golden × 0.99`` and ranges as
+    ``golden × 0.9 … golden × 1.1``, so this inverts whichever form it is.
+    """
+    if upper is None:
+        return round(lower / 0.99, 4)
+    return round((lower + upper) / 2, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -209,20 +275,26 @@ def _write_system_power(system_dir: Path, desc: dict[str, Any], *, dry_run: bool
     Synthesised from the node counts already in the system description, so the fixture
     corpus carries a self-consistent figure rather than a magic number. Left alone once
     it is in Appendix E form — a hand-tuned power file is a legitimate fixture edit —
-    but a descriptor in the pre-Appendix E flat form is rewritten.
+    except for ``cooling``, which E.2 requires to agree with the description and so
+    follows it (step 8 declares cooling where the corpus had none). A descriptor in the
+    pre-Appendix E flat form is rewritten.
     """
     path = system_dir / layout.SYSTEM_POWER_JSON
-    existing = _read_json(path)
-    if existing is not None and "node_sets" in existing:
-        return []
-
     nodes = desc.get("node_types") or [{}]
     node = nodes[0] if isinstance(nodes[0], dict) else {}
+    cooling = node.get("cooling") or desc.get("cooling") or ""
+    liquid = any(word in cooling.lower() for word in ("liquid", "water", "immersion"))
+    declared_cooling = "liquid" if liquid else "air"
+
+    existing = _read_json(path)
+    if existing is not None and "node_sets" in existing:
+        if existing.get("cooling") == declared_cooling:
+            return []
+        return _write_json(path, {**existing, "cooling": declared_cooling}, dry_run=dry_run)
+
     accelerators = node.get("accelerator_info") or [{}]
     accel = accelerators[0] if isinstance(accelerators[0], dict) else {}
     node_count = int(desc.get("system_node_ensemble_total") or 1)
-    cooling = node.get("cooling") or desc.get("cooling") or ""
-    liquid = any(word in cooling.lower() for word in ("liquid", "water", "immersion"))
 
     def sourced(watts: float, what: str) -> dict[str, Any]:
         return {
@@ -233,7 +305,7 @@ def _write_system_power(system_dir: Path, desc: dict[str, Any], *, dry_run: bool
 
     power: dict[str, Any] = {
         "system_desc_id": system_dir.name,
-        "cooling": "liquid" if liquid else "air",
+        "cooling": declared_cooling,
         "node_sets": [
             {
                 "node_set_id": 0,
@@ -345,7 +417,11 @@ def _system_description_for(system_dir: Path, legacy_path: Path) -> dict[str, An
             migrated = _read_json(point_dir / layout.SYSTEM_DESC_JSON)
             if migrated is not None:
                 # tps_utilization is per point; the curve loop sets it again.
-                return {k: v for k, v in migrated.items() if k != "tps_utilization"}
+                # Through _modernise_system_desc too, which is a no-op on a current
+                # description, so a step added later still reaches migrated trees.
+                return _modernise_system_desc(
+                    {k: v for k, v in migrated.items() if k != "tps_utilization"}
+                )
     return {}
 
 
@@ -357,7 +433,25 @@ def _modernise_system_desc(desc: dict[str, Any]) -> dict[str, Any]:
         if value is not None and "publication_status" not in out:
             out["publication_status"] = value
     out["node_types"] = [_modernise_node(n) for n in out.get("node_types") or []]
+    if not out.get("cooling") and not any(
+        isinstance(n, dict) and n.get("cooling") for n in out["node_types"]
+    ):
+        out["cooling"] = _cooling_for(out)
     return out
+
+
+def _cooling_for(desc: dict[str, Any]) -> str:
+    """§8.2 ``cooling`` for a system that declares none — see _LIQUID_COOLED_ACCELERATORS."""
+    names = [
+        str(accel.get("accelerator_model_name") or "")
+        for node in desc.get("node_types") or []
+        if isinstance(node, dict)
+        for accel in node.get("accelerator_info") or []
+        if isinstance(accel, dict)
+    ]
+    if any(marker in name for name in names for marker in _LIQUID_COOLED_ACCELERATORS):
+        return _LIQUID_COOLED
+    return _AIR_COOLED
 
 
 def _modernise_node(node: dict[str, Any]) -> dict[str, Any]:

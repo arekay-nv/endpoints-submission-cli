@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from submission_checker.agentic_targets import get_agentic_targets
+from submission_checker import agentic_targets
+from submission_checker.agentic_targets import AgenticTargets, get_agentic_targets
 from submission_checker.models import AccuracyResult, PointConfig, Severity
 
 from .conftest import _config, _model_ctx, _summary
@@ -67,7 +68,9 @@ class TestTargetLookup:
             ("Kimi-K3-NVFP4", "Kimi K3"),
             ("qwen3_6-35b-a3b", "Qwen3.6-35B-A3B"),
             ("Qwen3.6-35B-A3B-FP8", "Qwen3.6-35B-A3B"),
-            ("deepseek-v4-pro", "DSV4"),
+            ("deepseek-v4_1-flash", "DeepSeek-V4.1-Flash"),
+            ("DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash"),
+            ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash"),
         ],
     )
     def test_recognised(self, model: str, name: str) -> None:
@@ -76,13 +79,20 @@ class TestTargetLookup:
 
     @pytest.mark.parametrize("model", ["llama3.1-8b", "gpt-oss-120b", "deepseek-r1"])
     def test_single_turn_models_are_not_agentic_targets(self, model: str) -> None:
-        """deepseek-r1 must not collide with the deepseek-v4 entry."""
+        """deepseek-r1 must not collide with the DeepSeek-V4.1-Flash entry."""
         assert get_agentic_targets(model) is None
 
-    def test_dsv4_thresholds_are_unpublished(self) -> None:
-        """The README records every DSV4 threshold as TBD."""
-        targets = get_agentic_targets("deepseek-v4-pro")
-        assert targets is not None and not targets.published
+    def test_retired_deepseek_v4_pro_is_not_recognised(self) -> None:
+        """V4-Pro was replaced by V4.1-Flash, and must not inherit its gates."""
+        assert get_agentic_targets("deepseek-v4-pro") is None
+
+    def test_dsv41_flash_thresholds_match_the_reference(self) -> None:
+        """Reference implementation README, Agentic Inference accuracy table."""
+        targets = get_agentic_targets("deepseek-v4_1-flash")
+        assert targets is not None and targets.published
+        assert targets.inline_min == 52.36
+        assert targets.swebench_min == 96.4
+        assert targets.osl_range == (793.0, 970.0)
 
 
 @pytest.mark.unit
@@ -97,8 +107,21 @@ class TestGateScope:
         hits = _hits(ctx, "agentic-accuracy")
         assert hits and hits[0].severity == Severity.WARNING
 
-    def test_dsv4_warns_that_thresholds_are_tbd(self, tmp_path: Path) -> None:
-        ctx = _ctx(tmp_path, model_name="deepseek-v4-pro")
+    def test_tbd_thresholds_warn(self, tmp_path: Path, monkeypatch) -> None:
+        """No current model is TBD, so stand one in to keep the path covered."""
+        monkeypatch.setattr(
+            agentic_targets,
+            "_AGENTIC_TARGETS",
+            [
+                (
+                    frozenset({"future", "model"}),
+                    AgenticTargets(
+                        name="Future", inline_min=None, swebench_min=None, osl_range=None
+                    ),
+                )
+            ],
+        )
+        ctx = _ctx(tmp_path, model_name="future-model")
         hits = _hits(ctx, "agentic-accuracy")
         assert hits and hits[0].severity == Severity.WARNING
         assert "TBD" in hits[0].message

@@ -52,7 +52,7 @@ class TestLaterCommands:
 
     _RECORD = {"cli_version": "1.0.0.0", "created_at": _CREATED}
 
-    @pytest.mark.parametrize("command", ["add-run", "remove-run", "update", "create-local"])
+    @pytest.mark.parametrize("command", ["add-run", "remove-run", "update"])
     def test_splits_creating_and_current_version(self, tmp_path: Path, command: str) -> None:
         with _running("1.2.0.0"):
             meta = _write_cli_metadata(tmp_path, command, self._RECORD)
