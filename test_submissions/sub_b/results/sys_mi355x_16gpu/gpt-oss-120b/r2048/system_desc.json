@@ -50,7 +50,7 @@
   "config_summary": {
     "disaggregated": null,
     "expert_parallel": 1,
-    "tensor_parallel": 1,
+    "tensor_parallel": 16,
     "pipeline_parallel": 1,
     "data_parallel": 1,
     "batch": null

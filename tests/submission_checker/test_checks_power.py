@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from submission_checker.checker import SubmissionChecker
@@ -577,9 +578,167 @@ class TestPowerDescriptorRule:
         assert warnings and "[7]" in warnings[0].message
 
 
+def _point_dirs(root: Path) -> list[Path]:
+    return sorted(p.parent for p in root.rglob("point.yaml"))
+
+
+def _rewrite_desc(root: Path, edit, point: int | None = None) -> None:
+    """Apply *edit* to every point's system_desc.json, or to point r<point> only."""
+    for point_dir in _point_dirs(root):
+        if point is not None and point_dir.name != f"r{point}":
+            continue
+        path = point_dir / "system_desc.json"
+        data = json.loads(path.read_text())
+        edit(data)
+        path.write_text(json.dumps(data))
+
+
+def _set_parallelism(root: Path, point: int | None = None, **values: Any) -> None:
+    _rewrite_desc(root, lambda d: d["config_summary"].update(values), point)
+
+
+def _rewrite_point(root: Path, point: int, edit) -> None:
+    path = root / "results" / "acme_h100x8_001" / "llama3_1-8b" / f"r{point}" / "point.yaml"
+    data = yaml.safe_load(path.read_text())
+    edit(data)
+    path.write_text(yaml.safe_dump(data))
+
+
+def _three_nodes(root: Path) -> None:
+    """Make the valid fixture three 8-accelerator nodes: 3 x 9,800 W x 1.50 = 44.10 kW.
+
+    Every point runs one TP=16 replica — floor(24 / 16) = 1 — so it engages 16
+    accelerators on two of the three nodes, the C.3 shape: a remainder too small for
+    another replica.
+    """
+    _rewrite(root, lambda d: d["node_sets"][0].update(nodes_provisioned=3))
+
+    def desc(d: dict[str, Any]) -> None:
+        d["node_types"][0]["number_of_nodes"] = 3
+        d["system_node_ensemble_total"] = 3
+        d["config_summary"].update(tensor_parallel=16, data_parallel=1)
+
+    _rewrite_desc(root, desc)
+
+
+def _kw(result) -> str:
+    return result.message.split("point_power_kw ")[1].split(",")[0]
+
+
+@pytest.mark.unit
+class TestPointPower:
+    """§4.5.3's point_power_kw, against the rules' own worked figures."""
+
+    def test_single_node_is_constant(self) -> None:
+        out = _compute(DGX_B300)
+        assert out.point_power_kw() == out.point_power_kw({0: 1}) == 14.50
+
+    def test_rack_by_engaged_nodes(self) -> None:
+        """C.3: the 152.10 kW C.2 rack, 16 of 18 nodes engaged, divides by 135.20 kW."""
+        data = _edit(DGX_CLUSTER)
+        data["cooling"] = "liquid"
+        data["scale_out"] = {"present": False}
+        data["node_sets"][0].update(nodes_provisioned=18, published_power=_sv(8450))
+        for key in ("computed", "provisioned_power_kw"):
+            del data[key]
+        out = _compute(data)
+        assert out.provisioned_power_kw == 152.10
+        assert out.point_power_kw({0: 16}) == 135.20
+        assert out.point_power_kw({0: 4}) == 33.80  # C.3's DP = 1 counterfactual
+
+    def test_node_scaling_composes(self) -> None:
+        """C.5: 140 kW x 6/18 = 46.67 kW provisioned; 2 of those 6 nodes give 15.56 kW."""
+        data = {
+            "system_desc_id": "partial_rack",
+            "cooling": "liquid",
+            "scale_out": {"present": False},
+            "node_sets": [
+                {
+                    "node_set_id": 0,
+                    "system_node_ensemble_id": 0,
+                    "nodes_provisioned": 6,
+                    "nodes_in_published_rack": 18,
+                    "power_method": "node_scaling",
+                    "published_power": _sv(140.0, "value_kw"),
+                }
+            ],
+        }
+        out = _compute(data)
+        assert out.provisioned_power_kw == 46.67
+        assert out.point_power_kw({0: 2}) == 15.56
+
+    def test_switch_power_scales_with_the_nodes(self) -> None:
+        """§4.5.3: S scales by Σ Y / Σ N — half the E.6.3 cluster is 72.50 + 0.90 kW."""
+        out = _compute(DGX_CLUSTER)
+        assert out.point_power_kw({0: 5}) == 73.40
+
+    def test_heterogeneous_sets_scale_separately(self) -> None:
+        """E.6.4's sets at 75.00 and 36.00 kW: all of the first, a third of the second."""
+        data = {
+            "system_desc_id": "mixed_rack",
+            "cooling": "liquid",
+            "scale_out": {"present": False},
+            "node_sets": [
+                {
+                    "node_set_id": i,
+                    "system_node_ensemble_id": i,
+                    "nodes_provisioned": n,
+                    "nodes_in_published_rack": 8,
+                    "power_method": "node_scaling",
+                    "published_power": _sv(kw, "value_kw"),
+                }
+                for i, n, kw in ((0, 5, 120.0), (1, 3, 96.0))
+            ],
+        }
+        out = _compute(data)
+        assert out.point_power_kw({1: 1}) == 87.00
+
+    def test_set_shares_and_switches_sum_to_the_total(self) -> None:
+        """P_s carries its overhead and counted NICs, so Σ P_s + S is C.11's 161.94 kW."""
+        data = _edit(DGX_B300)
+        data["node_sets"][0]["nodes_provisioned"] = 10
+        for key in ("declared_provisioned_power", "computed", "provisioned_power_kw"):
+            del data[key]
+        data["scale_out"] = _edit(DGX_CLUSTER["scale_out"])
+        data["scale_out"]["nics"]["counted"] = True
+        out = _compute(data)
+        shares = sum(s.power_w for s in out.sets) + out.scale_out_switch_power_w
+        assert shares == pytest.approx(out.total_system_power_w)
+        assert out.sets[0].accelerators_per_node == 8
+
+    def test_declared_figure_scales_homogeneously(self) -> None:
+        """§4.5.3's homogeneous form: provisioned_power_kw x (Y / N)."""
+        data = _edit(DGX_CLUSTER)
+        data["declared_provisioned_power"] = _sv(140.0, "value_kw")
+        del data["computed"], data["provisioned_power_kw"]
+        out = _compute(data)
+        assert out.point_power_kw({0: 5}) == 70.00
+
+    def test_declared_figure_over_several_sets_takes_the_largest_fraction(self) -> None:
+        data = {
+            "system_desc_id": "mixed_rack",
+            "cooling": "liquid",
+            "scale_out": {"present": False},
+            "declared_provisioned_power": _sv(100.0, "value_kw"),
+            "node_sets": [
+                {
+                    "node_set_id": i,
+                    "system_node_ensemble_id": i,
+                    "nodes_provisioned": n,
+                    "power_method": "published_system",
+                    "published_power": _sv(10.0, "value_kw"),
+                }
+                for i, n in ((0, 5), (1, 3))
+            ],
+        }
+        out = _compute(data)
+        assert out.point_power_kw({0: 4, 1: 1}) == 80.00
+        assert out.point_power_kw({0: 4}) == 100.00  # set 1 undeclared: fully engaged
+
+
 @pytest.mark.unit
 class TestNormalizedMetric:
-    """§4.5.3: system_tps_per_kw = system_tps / provisioned_power_kw."""
+    """§9.1 "Per-point denominator": system_tps_per_kw = system_tps / point_power_kw."""
 
     def _set_stored(self, root: Path, value: float) -> None:
         for path in root.rglob("result_summary.json"):
@@ -604,11 +763,184 @@ class TestNormalizedMetric:
         report = SubmissionChecker(root).run()
         assert not _hits(report, "metric-consistency-tps-per-kw")
 
-    def test_denominator_is_constant_across_the_curve(self, tmp_path: Path) -> None:
-        """§4.5.3: a low-concurrency point is normalised by the *full* provisioned power."""
+    def test_single_node_denominator_is_constant(self, tmp_path: Path) -> None:
+        """§4.5.3: with Y = N = 1 every point divides by the full node power."""
         report = SubmissionChecker(_copy(tmp_path)).run()
-        kws = {
-            r.message.split("/")[-1].strip().removesuffix(" kW)")
+        kws = {_kw(r) for r in _hits(report, "metric-consistency-tps-per-kw", Severity.INFO)}
+        assert kws == {"14.70"}
+
+    def test_undeclared_point_uses_full_power(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _three_nodes(root)
+        report = SubmissionChecker(root).run()
+        assert not report.errors, [r.message for r in report.errors]
+        kws = {_kw(r) for r in _hits(report, "metric-consistency-tps-per-kw", Severity.INFO)}
+        assert kws == {"44.10"}
+
+    def test_declared_nodes_scale_the_point(self, tmp_path: Path) -> None:
+        """Two of three nodes engaged: 44.10 x 2/3 = 29.40 kW, at that point only."""
+        root = _copy(tmp_path)
+        _three_nodes(root)
+        _rewrite_point(
+            root, 16, lambda d: d.update(nodes_used=[{"system_node_ensemble_id": 0, "nodes": 2}])
+        )
+        report = SubmissionChecker(root).run()
+        assert not report.errors, [r.message for r in report.errors]
+        by_point = {
+            r.path.parent.name: _kw(r)
             for r in _hits(report, "metric-consistency-tps-per-kw", Severity.INFO)
         }
-        assert len(kws) == 1, f"denominator varies across the curve: {kws}"
+        assert by_point.pop("r16") == "29.40"
+        assert set(by_point.values()) == {"44.10"}
+
+    def test_stored_value_checked_against_the_point_denominator(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _three_nodes(root)
+        _rewrite_point(
+            root, 16, lambda d: d.update(nodes_used=[{"system_node_ensemble_id": 0, "nodes": 2}])
+        )
+        summary_path = next(p for p in _point_dirs(root) if p.name == "r16") / "result_summary.json"
+        summary = json.loads(summary_path.read_text())
+        tps = summary["output_sequence_lengths"]["total"] / (summary["duration_ns"] / 1e9)
+        summary["system_tps_per_kw"] = round(tps / 44.10, 1)  # the full figure: wrong
+        summary_path.write_text(json.dumps(summary))
+        errors = _hits(
+            SubmissionChecker(root).run(), "metric-consistency-tps-per-kw", Severity.ERROR
+        )
+        assert errors and "29.40" in errors[0].message
+
+
+@pytest.mark.unit
+class TestNodesUsed:
+    """§9.1 "Per-point node declaration"."""
+
+    def _declare(self, root: Path, *entries: tuple[int, int]) -> None:
+        _rewrite_point(
+            root,
+            16,
+            lambda d: d.update(
+                nodes_used=[{"system_node_ensemble_id": e, "nodes": n} for e, n in entries]
+            ),
+        )
+
+    @pytest.mark.parametrize(
+        ("entries", "fragment"),
+        [
+            (((0, 4),), "no greater than N_s = 3"),
+            (((0, 0),), "positive whole number"),
+            (((7, 2),), "matches 0 node sets"),
+            (((0, 2), (0, 2)), "declared twice"),
+            (((0, 1),), "hold 8 accelerators"),
+        ],
+    )
+    def test_rejected(self, tmp_path: Path, entries, fragment: str) -> None:
+        root = _copy(tmp_path)
+        _three_nodes(root)
+        self._declare(root, *entries)
+        report = SubmissionChecker(root).run()
+        errors = _hits(report, "nodes-used", Severity.ERROR)
+        assert errors and fragment in errors[0].message
+        # No denominator is checked against a declaration that did not validate.
+        assert not [
+            r for r in _hits(report, "metric-consistency-tps-per-kw") if r.path.parent.name == "r16"
+        ]
+
+    def test_more_nodes_than_engaged_warns(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _three_nodes(root)
+        self._declare(root, (0, 3))
+        report = SubmissionChecker(root).run()
+        assert not _hits(report, "nodes-used", Severity.ERROR)
+        warnings = _hits(report, "nodes-used", Severity.WARNING)
+        assert warnings and "ceil(16 / 8) = 2 nodes" in warnings[0].message
+
+
+@pytest.mark.unit
+class TestMaximalEngagement:
+    """§9.1 "Maximal engagement": DP = floor(A_provisioned / A_replica)."""
+
+    def test_fully_engaged_passes(self, tmp_path: Path) -> None:
+        report = SubmissionChecker(_copy(tmp_path)).run()
+        hits = _hits(report, "maximal-engagement")
+        assert hits and all(r.severity == Severity.INFO for r in hits)
+
+    def test_shortfall_without_declaration_is_rejected(self, tmp_path: Path) -> None:
+        """TP=4 on 8 accelerators fits two replicas; running one is not a valid point."""
+        root = _copy(tmp_path)
+        _set_parallelism(root, 16, tensor_parallel=4, data_parallel=1)
+        errors = _hits(SubmissionChecker(root).run(), "maximal-engagement", Severity.ERROR)
+        assert errors and "floor(8 / 4) = 2" in errors[0].message
+
+    def test_declared_shortfall_is_left_to_peer_review(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _set_parallelism(root, 16, tensor_parallel=4, data_parallel=1)
+        _rewrite_point(
+            root,
+            16,
+            lambda d: d.update(
+                dp_shortfall={"dp_actual": 1, "dp_formula": 2, "reason": "host memory binds"}
+            ),
+        )
+        report = SubmissionChecker(root).run()
+        assert not _hits(report, "maximal-engagement", Severity.ERROR)
+        warnings = _hits(report, "maximal-engagement", Severity.WARNING)
+        assert warnings and "host memory binds" in warnings[0].message
+
+    def test_shortfall_must_match_the_point(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _set_parallelism(root, 16, tensor_parallel=2, data_parallel=1)
+        _rewrite_point(
+            root,
+            16,
+            lambda d: d.update(dp_shortfall={"dp_actual": 1, "dp_formula": 2, "reason": "x"}),
+        )
+        errors = _hits(SubmissionChecker(root).run(), "maximal-engagement", Severity.ERROR)
+        assert errors and "runs DP 1 of floor(8 / 2) = 4" in errors[0].message
+
+    def test_more_than_provisioned_is_rejected(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _set_parallelism(root, 16, tensor_parallel=4, data_parallel=3)
+        errors = _hits(SubmissionChecker(root).run(), "maximal-engagement", Severity.ERROR)
+        assert errors and "more than the 8 provisioned" in errors[0].message
+
+    def test_parallelism_may_vary_between_points(self, tmp_path: Path) -> None:
+        """§8.1 / C.3: each point's system_desc.json carries its own parallelism."""
+        root = _copy(tmp_path)
+        _set_parallelism(root, 16, tensor_parallel=4, data_parallel=2)
+        report = SubmissionChecker(root).run()
+        assert not report.errors, [r.message for r in report.errors]
+
+    def test_disaggregated_is_left_to_peer_review(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _set_parallelism(root, 16, disaggregated=True, tensor_parallel=1)
+        report = SubmissionChecker(root).run()
+        assert not _hits(report, "maximal-engagement", Severity.ERROR)
+        assert _hits(report, "maximal-engagement", Severity.WARNING)
+
+    def test_undeclared_parallelism_warns(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _rewrite_desc(root, lambda d: d.update(config_summary="free-form summary"), 16)
+        report = SubmissionChecker(root).run()
+        warnings = _hits(report, "maximal-engagement", Severity.WARNING)
+        assert warnings and "declares no" in warnings[0].message
+
+
+@pytest.mark.unit
+class TestDivisionScope:
+    """§4.5: required for Standardized; RDI may, Serviced is deferred."""
+
+    @pytest.mark.parametrize("division", ["RDI", "Serviced"])
+    def test_optional_outside_standardized(self, tmp_path: Path, division: str) -> None:
+        root = _copy(tmp_path)
+        _rewrite_desc(root, lambda d: d.update(division=division))
+        for path in _power_files(root):
+            path.unlink()
+        report = SubmissionChecker(root).run()
+        assert not _hits(report, "power-descriptor", Severity.ERROR)
+        assert _hits(report, "power-descriptor", Severity.INFO)
+
+    def test_supplied_descriptor_is_still_validated(self, tmp_path: Path) -> None:
+        root = _copy(tmp_path)
+        _rewrite_desc(root, lambda d: d.update(division="RDI"))
+        _rewrite(root, lambda d: d.update(cooling="liquid"))
+        assert _hits(SubmissionChecker(root).run(), "power-descriptor", Severity.ERROR)

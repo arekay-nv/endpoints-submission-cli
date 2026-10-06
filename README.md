@@ -201,7 +201,7 @@ Pareto point carries its own `system_desc.json`.
     ├── docs/                         # calibration, software disclosure, …
     └── results/
         └── <system>/
-            ├── system_power.json      # §4.5.2 — REQUIRED, one per system
+            ├── system_power.json      # §4.5.2 — one per system; REQUIRED for Standardized
             └── <model_name>/
                 └── r<N>/             # one directory per concurrency level
                     ├── point.yaml            # §8.3 measurement-point disclosure
@@ -240,12 +240,12 @@ submission root (§9.1).
 |------|------|-------------|
 | `system-description-present` | §8.2 | Every point has a `system_desc.json` |
 | `system-description-valid` | §8.2 | It parses against the `SystemDescription` schema |
-| `system-description-consistency` | §8.5 | Every point of a curve describes the same system |
+| `system-description-consistency` | §8.5 | Every point of a curve describes the same system (parallelism, `batch` and `config_summary` may vary by point) |
 | `model-name-valid` | §3.2 | `point.yaml`'s `model_name` is exactly one of the round's supported models, spelled canonically |
 | `model-name-consistency` | §8.1 | It is exactly the results directory name |
 | `max-concurrency-declared` | §7 | `max_supported_concurrency` (C_max) present and > 32 |
 | `tps-utilization` | §8.2 | Equals `system_tps / max(system_tps)` over the point's own curve |
-| `power-descriptor` | §4.5.2, App. E | `system_power.json` present per system and valid under Appendix E.7 |
+| `power-descriptor` | §4.5.2, App. E | `system_power.json` present per system and valid under Appendix E.7; optional for RDI and Serviced |
 | `power-estimated` | §4.5.2, App. D | "MLC Estimated Power": an Appendix D value reaches the total (warn) |
 
 > The benchmark model name is read from **`point.yaml`** (§8.3), and from nowhere else.
@@ -259,7 +259,7 @@ submission root (§9.1).
 > `llama3_1-8b`, `gpt-oss-120b` or `deepseek-r1`. The checker does not rewrite it, so
 > `llama3.1-8b` fails `model-name-valid`, and the error names the spelling to use.
 
-`system_power.json` follows **Appendix E** (policies PR #126): one entry per set of
+`system_power.json` follows **Appendix E** (policies PR #126 at `0e83c26`): one entry per set of
 identical nodes, and every power figure written as a sourced value —
 `{"value_w": 1100, "source_type": "vendor_spec", "source": "https://..."}`. The source
 types are `vendor_spec`, `publication`, `public_statement` and `mlc_default`; a
@@ -300,6 +300,55 @@ Details that are easy to get wrong:
 - **A submitter's `computed` block is checked, not trusted.** Where it disagrees with
   the recomputation, E.7 rejects the descriptor rather than silently correcting it.
   `provisioned_power_kw` is rounded once, to two decimal places.
+
+#### Per-point normalisation (§4.5.3)
+
+Provisioned power is fixed per system, but each point is normalised by the power of the
+**whole nodes it engages**:
+
+```
+point_power_kw = Σ_s P_s × (Y_s / N_s)  +  S × (Σ Y_s / Σ N_s)
+```
+
+`P_s` is node set `s`'s share of provisioned power (overhead and counted NICs included),
+`N_s` its `nodes_provisioned`, and `S` the scale-out switch power. `Y_s` comes from the
+point's optional `nodes_used` in `point.yaml`:
+
+```yaml
+nodes_used:
+  - system_node_ensemble_id: 0
+    nodes: 16
+```
+
+Without `nodes_used` a point is normalised by the full provisioned power, which is also
+always the answer for a single node. Each point must also be **maximally engaged**: its
+own `system_desc.json` must run `DP = floor(A_provisioned / A_replica)` replicas, where
+`A_replica = TP × PP × EP`. A point that runs fewer declares why:
+
+```yaml
+dp_shortfall:
+  dp_actual: 3
+  dp_formula: 4
+  reason: "a fourth TP=16 replica needs one NVLink domain; the remaining 16 GPUs span two"
+```
+
+| Rule | Spec | Description |
+|------|------|-------------|
+| `nodes-used` | §4.5.3, §8.3 | Each entry names exactly one node set, `1 ≤ nodes ≤ N_s`, and the declared nodes hold the accelerators the point's parallelism engages (more than needed is a warning) |
+| `maximal-engagement` | §4.5.3 | `DP = floor(A_provisioned / A_replica)`, or a matching `dp_shortfall` (warned for peer review). Disaggregated serving is left to peer review |
+| `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / point_power_kw` |
+
+Choices the rules leave open, made here conservatively:
+
+- **`declared_provisioned_power` with several node sets** does not split into per-set
+  shares, so it is scaled by the largest engaged fraction of any set. With one set this
+  is exactly §4.5.3's `provisioned_power_kw × (Y / N)`.
+- **Accelerators per node** come from the set's `accelerator.count_per_node`, or from
+  §8.2's `node_types` where the set is on a published path and has no components block.
+- **Heterogeneous systems** declare parallelism for the whole system, so the checker
+  verifies only that the declared nodes together hold the engaged accelerators.
+- **`dp_shortfall` key names** (`dp_actual`, `dp_formula`, `reason`) are this checker's;
+  §8.3 lists the contents but not the names.
 
 ### Regions (§5)
 
@@ -387,7 +436,7 @@ set published after this release.
 | `metric-consistency-system-tps` | §9.1 | Stored `system_tps` matches the derived value |
 | `metric-consistency-tpot-p90` | §9.1 | Reported TPOT P90 present, finite, strictly positive |
 | `metric-consistency-tps-per-user` | §9.1 | Stored `tps_per_user` matches `1000 / tpot_p90_ms` |
-| `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / provisioned_power_kw` |
+| `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / point_power_kw` — see [per-point normalisation](#per-point-normalisation-453) |
 | `agentic-metric-consistency` | §4.1 | `e2e_avg_interactivity` is derivable from its reported inputs |
 
 ### Accuracy (§15)

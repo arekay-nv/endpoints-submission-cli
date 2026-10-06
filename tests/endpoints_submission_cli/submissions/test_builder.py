@@ -1378,10 +1378,10 @@ class TestSystemPowerDescriptor:
         assert not list(sub_dir.rglob("system_power.json"))
 
     def test_conflicting_descriptors_fail_the_build(self, run_folder: Path, tmp_path: Path) -> None:
-        """§4.5.3 makes provisioned power a property of the system, not of a point."""
+        """§8.1: one descriptor per system — what varies by point is ``nodes_used``."""
         a = self._archive(run_folder, tmp_path, "a", {"provisioned_power_w": 14700})
         b = self._archive(run_folder, tmp_path, "b", {"provisioned_power_w": 20000})
-        with pytest.raises(SubmissionBuildError, match="provisioned power"):
+        with pytest.raises(SubmissionBuildError, match="one descriptor per system"):
             build_submission_folder(
                 [("run-001", a), ("run-002", b)], "standardized", "available", tmp_path / "sub"
             )

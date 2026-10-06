@@ -50,9 +50,9 @@
   "config_summary": {
     "disaggregated": null,
     "expert_parallel": 1,
-    "tensor_parallel": 1,
+    "tensor_parallel": 8,
     "pipeline_parallel": 1,
-    "data_parallel": 1,
+    "data_parallel": 2,
     "batch": null
   },
   "tps_utilization": 0.287332

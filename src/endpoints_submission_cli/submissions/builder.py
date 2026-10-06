@@ -358,8 +358,9 @@ def _load_json_if_present(path: Path) -> dict[str, Any] | None:
 def _write_system_power(submission_dir: Path, system_id: str, runs: list[dict[str, Any]]) -> None:
     """Write ``results/<system>/system_power.json`` from whichever run supplies it.
 
-    §4.5.3 makes provisioned power a property of the *system* — constant across every
-    point of its curve — so the runs of one system must agree on it.
+    §8.1 places one descriptor per *system*: provisioned power and each node set's
+    ``N_s`` describe the hardware, and only the nodes a point engages vary by point
+    (``nodes_used`` in ``point.yaml``, §4.5.3). So the runs of one system must agree on it.
 
     Raises:
         SubmissionBuildError: If the system's runs declare conflicting power.
@@ -371,8 +372,8 @@ def _write_system_power(submission_dir: Path, system_id: str, runs: list[dict[st
     if any(d != first for d in declared[1:]):
         raise SubmissionBuildError(
             f"System {system_id}: runs declare different {layout.SYSTEM_POWER_JSON} contents."
-            " §4.5.3 makes provisioned power a property of the system, constant across"
-            " every point of its curve."
+            " §8.1 allows one descriptor per system; what varies by point is declared as"
+            " nodes_used in point.yaml (§4.5.3)."
         )
     path = submission_dir / layout.RESULTS_DIR / system_id / layout.SYSTEM_POWER_JSON
     path.parent.mkdir(parents=True, exist_ok=True)

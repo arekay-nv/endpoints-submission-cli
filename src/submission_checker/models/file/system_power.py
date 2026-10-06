@@ -3,10 +3,12 @@
 """Provisioned power — the ``system_power.json`` descriptor of Appendix E.
 
 §4.5 normalises throughput by the system's **provisioned** power: what the system is
-built to draw, not what a given measurement point actually drew. §4.5.3 is explicit
-that the denominator is therefore constant across a submission's whole Pareto curve.
+built to draw, not what a given measurement point actually drew. Provisioned power is
+fixed per system; §4.5.3 then scales it per measurement point by the whole nodes that
+point engages, which is why :class:`PowerComputation` keeps each node set's share
+``P_s`` and the scale-out switch power ``S`` apart rather than only their sum.
 
-Appendix E (policies PR #126) is the normative schema. The descriptor records *how*
+Appendix E (policies PR #126, at ``0e83c26``) is the normative schema. The descriptor records *how*
 provisioned power was established — per homogeneous set of nodes, with every power
 figure carrying its own source — and §4.5.2's model turns it into one number:
 
@@ -30,6 +32,7 @@ value — and does the E.5 arithmetic. The E.7 rules that need the system descri
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -50,6 +53,7 @@ __all__ = [
     "NodeSet",
     "PowerComputation",
     "ScaleOut",
+    "SetPower",
     "SourcedValue",
     "SystemPower",
     "overhead_for_cooling",
@@ -233,13 +237,41 @@ class Computed(_Open):
     total_system_power_w: float | None = None
 
 
+@dataclass(frozen=True)
+class SetPower:
+    """One node set's share of provisioned power — §4.5.3's ``P_s`` and ``N_s``.
+
+    Attributes:
+        node_set_id: The set's E.3 identifier.
+        system_node_ensemble_id: The §8.2 node type it describes, which is what a
+            point's ``nodes_used`` names.
+        nodes_provisioned: ``N_s``.
+        power_w: ``P_s``. For a ``component_sum`` set this is its components and its
+            share of counted scale-out NICs, with the overhead fraction applied; for a
+            published set, the published figure (plus any NICs evidenced as excluded
+            from it). Scale-out switch power is not in it — that is §4.5.3's ``S``.
+        accelerators_per_node: ``accelerator.count_per_node`` where the descriptor
+            states it, else ``None`` for the checker to fill from §8.2.
+    """
+
+    node_set_id: int
+    system_node_ensemble_id: int
+    nodes_provisioned: int
+    power_w: float
+    accelerators_per_node: int | None
+
+
 @dataclass
 class PowerComputation:
     """The checker's own E.5 figures, and what it had to say while getting them.
 
     Attributes:
-        provisioned_power_kw: §4.5.3's denominator, rounded to two decimal places, or
-            ``None`` where the descriptor does not determine it.
+        provisioned_power_kw: The system's full provisioned power, rounded to two
+            decimal places, or ``None`` where the descriptor does not determine it.
+            Each point's denominator is scaled from it (:meth:`point_power_kw`).
+        sets: Each node set's ``P_s`` and ``N_s``, for §4.5.3's per-point scaling.
+        declared: True where ``declared_provisioned_power`` governs, so the total
+            does not decompose into the per-set shares.
         estimated: Appendix D values, supplied or auto-populated, that reach
             ``provisioned_power_kw`` — each one sets the "MLC Estimated Power" tag.
         problems: E.7 rejections and other §4.5.2 MUST violations.
@@ -252,9 +284,48 @@ class PowerComputation:
     published_node_power_w: float = 0.0
     scale_out_switch_power_w: float = 0.0
     provisioned_power_kw: float | None = None
+    sets: list[SetPower] = field(default_factory=list)
+    declared: bool = False
     estimated: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+    def point_power_kw(self, nodes_used: Mapping[int, int] | None = None) -> float | None:
+        """§4.5.3's ``point_power_kw`` for a point engaging *nodes_used*.
+
+        .. code-block:: text
+
+            point_power_kw = Σ_s P_s × (Y_s / N_s)  +  S × (Σ Y_s / Σ N_s)
+
+        Args:
+            nodes_used: ``Y_s`` keyed by ``node_set_id``. A set it does not name is
+                taken as fully engaged, ``Y_s = N_s`` — §4.5.3's conservative default
+                for a point that declares nothing.
+
+        A ``declared_provisioned_power`` is one figure for the whole system and does
+        not split into per-set shares. For one set §4.5.3's homogeneous form applies
+        exactly, ``provisioned_power_kw × (Y / N)``; for several, the rules give no
+        decomposition, so the declared figure is scaled by the *largest* engaged
+        fraction of any set — the conservative reading, and the same answer wherever
+        the sets are engaged evenly.
+        """
+        kw = self.provisioned_power_kw
+        if kw is None:
+            return None
+        used = nodes_used or {}
+        fractions = {
+            s.node_set_id: used.get(s.node_set_id, s.nodes_provisioned) / s.nodes_provisioned
+            for s in self.sets
+        }
+        if not fractions or all(f == 1 for f in fractions.values()):
+            return kw
+        if self.declared:
+            return round(kw * max(fractions.values()), 2)
+        engaged = sum(s.nodes_provisioned * fractions[s.node_set_id] for s in self.sets)
+        provisioned = sum(s.nodes_provisioned for s in self.sets)
+        watts = sum(s.power_w * fractions[s.node_set_id] for s in self.sets)
+        watts += self.scale_out_switch_power_w * engaged / provisioned
+        return round(watts / _W_PER_KW, 2)
 
     @property
     def total_system_power_w(self) -> float:
@@ -338,11 +409,35 @@ class SystemPower(_Open):
         if len(set(ids)) != len(ids):
             out.problems.append("node_set_id values must be unique within the file")
 
+        # Each set's own major and published watts, kept apart for §4.5.3's P_s.
+        major: dict[int, float] = {}
+        published: dict[int, float] = {}
         for node_set in self.node_sets:
-            self._add_node_set(node_set, cores, out, tally)
-        self._add_scale_out(out, tally)
+            set_major, set_published = self._add_node_set(node_set, cores, out, tally)
+            major[node_set.node_set_id] = set_major
+            published[node_set.node_set_id] = set_published
+        nic_per_node_w = self._add_scale_out(out, tally)
+        for node_set in self.node_sets:
+            major[node_set.node_set_id] += node_set.nodes_provisioned * nic_per_node_w
 
+        out.major_components_w = sum(major.values())
+        out.published_node_power_w = sum(published.values())
         out.other_components_w = out.overhead_fraction * out.major_components_w
+        out.sets = [
+            SetPower(
+                node_set_id=s.node_set_id,
+                system_node_ensemble_id=s.system_node_ensemble_id,
+                nodes_provisioned=s.nodes_provisioned,
+                power_w=(1 + out.overhead_fraction) * major[s.node_set_id]
+                + published[s.node_set_id],
+                accelerators_per_node=(
+                    s.components.accelerator.count_per_node
+                    if s.components is not None and s.components.accelerator is not None
+                    else None
+                ),
+            )
+            for s in self.node_sets
+        ]
         out.problems.extend(tally.problems)
 
         declared = self.declared_provisioned_power
@@ -350,6 +445,7 @@ class SystemPower(_Open):
             # The declared figure governs, so the component block beneath it is only a
             # cross-check: its defaults do not tag the result and its gaps do not
             # reject it (E.1, E.6.2).
+            out.declared = True
             watts = declared.watts
             if watts is None:
                 out.problems.append("declared_provisioned_power must give value_kw or value_w")
@@ -377,37 +473,35 @@ class SystemPower(_Open):
         cores: dict[int, int],
         out: PowerComputation,
         tally: _Tally,
-    ) -> None:
+    ) -> tuple[float, float]:
+        """One set's ``(major, published)`` watts. A set that cannot be costed adds 0."""
         label = f"node_sets[{node_set.node_set_id}]"
         y = node_set.nodes_provisioned
         if node_set.power_method == "component_sum":
             if node_set.components is None:
                 out.problems.append(f"{label}: component_sum requires components")
-                return
+                return 0.0, 0.0
             per_node = self._per_node_w(
                 node_set.components, cores.get(node_set.system_node_ensemble_id), label, tally
             )
-            if per_node is not None:
-                out.major_components_w += y * per_node
-            return
+            return (0.0 if per_node is None else y * per_node), 0.0
 
         if node_set.published_power is None:
             out.problems.append(f"{label}: {node_set.power_method} requires published_power")
-            return
+            return 0.0, 0.0
         published = tally.watts(f"{label}.published_power", node_set.published_power)
         if published is None:
-            return
+            return 0.0, 0.0
         if node_set.power_method == "published_system":
-            out.published_node_power_w += y * published
-            return
+            return 0.0, y * published
         n = node_set.nodes_in_published_rack
         if n is None or n <= y:
             out.problems.append(
                 f"{label}: node_scaling requires nodes_in_published_rack greater than"
                 f" nodes_provisioned ({y}), got {n}"
             )
-            return
-        out.published_node_power_w += published * (y / n)
+            return 0.0, 0.0
+        return 0.0, published * (y / n)
 
     @staticmethod
     def _per_node_w(
@@ -487,10 +581,16 @@ class SystemPower(_Open):
             tally.estimated.append(f"{label}.energy_per_bit_pj ({energy.source} default)")
         return up.aggregate_bandwidth_tbps * 8.0 * energy.value_pj
 
-    def _add_scale_out(self, out: PowerComputation, tally: _Tally) -> None:
+    def _add_scale_out(self, out: PowerComputation, tally: _Tally) -> float:
+        """Add the switches to *out*; return the counted NIC watts **per node**.
+
+        The NICs are major components, so the caller adds them to each set's major
+        figure, where they take the overhead fraction like anything else in the node.
+        """
         fabric = self.scale_out
+        nic_per_node_w = 0.0
         if not fabric.present:
-            return
+            return nic_per_node_w
         missing = [
             name
             for name in ("cabling", "required_bandwidth_tbps", "nics", "switches")
@@ -498,7 +598,7 @@ class SystemPower(_Open):
         ]
         if missing:
             out.problems.append(f"scale_out.present is true but {', '.join(missing)} is missing")
-            return
+            return nic_per_node_w
         assert fabric.nics is not None and fabric.switches is not None
         assert fabric.required_bandwidth_tbps is not None
 
@@ -515,7 +615,7 @@ class SystemPower(_Open):
                 )
             per_nic = tally.watts("scale_out.nics.tdp_per_nic", nics.tdp_per_nic, nic_default())
             if per_nic is not None:
-                out.major_components_w += nodes * nics.count_per_node * per_nic
+                nic_per_node_w = nics.count_per_node * per_nic
         elif by_formula:
             out.problems.append(
                 "scale_out.nics.counted is false, but node power is built with the MLC"
@@ -544,6 +644,7 @@ class SystemPower(_Open):
                 f" but {nodes} nodes × {nics.count_per_node} NICs ×"
                 f" {nics.bandwidth_per_nic_gbps:g} Gb/s is {from_nics:g} Tb/s"
             )
+        return nic_per_node_w
 
     def _computed_disagreements(self, out: PowerComputation) -> list[str]:
         """E.7: a submitter-supplied figure that disagrees with the recomputation."""

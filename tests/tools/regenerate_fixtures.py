@@ -26,6 +26,10 @@ What it does, per submission tree:
 6. **Stale artifacts removed** — ``results_summary.json`` and ``point_<N>.yaml`` from
    the pre-``r<N>`` naming.
 7. **``valid_standardized`` point repair** — see :data:`POINT_RENAMES`.
+8. **Maximal engagement** (§4.5.3). The corpus declared ``TP = PP = EP = DP = 1`` on
+   systems of 4 to 72 accelerators, which engages one of them. A point that is not
+   maximally engaged is given one tensor-parallel replica per node — ``TP`` the node's
+   accelerators, ``DP`` its node count — which keeps names like ``sys_gaudi_dp2`` true.
 
 Run with ``uv run python tests/tools/regenerate_fixtures.py``; ``--check`` exits 1 if
 anything would change, which is what the idempotence test asserts.
@@ -184,6 +188,7 @@ def _regenerate_curve(
             util = round(point_tps / max_tps, 6)
         if util is not None:
             desc["tps_utilization"] = util
+        desc = _maximally_engaged(desc)
         changes += _write_json(point_dir / layout.SYSTEM_DESC_JSON, desc, dry_run=dry_run)
 
         summary = _modernise_summary(summaries[point_dir], legacy_meta)
@@ -279,6 +284,48 @@ def _write_system_power(system_dir: Path, desc: dict[str, Any], *, dry_run: bool
             ],
         }
     return _write_json(path, power, dry_run=dry_run)
+
+
+def _maximally_engaged(desc: dict[str, Any]) -> dict[str, Any]:
+    """Give *desc* one replica per node where §4.5.3's maximal engagement fails.
+
+    A description that already satisfies ``DP = floor(A_provisioned / A_replica)`` is
+    returned unchanged, so a hand-tuned parallelism survives a rerun.
+    """
+    nodes = [n for n in desc.get("node_types") or [] if isinstance(n, dict)]
+    per_node = [
+        sum(int(a.get("accelerators_per_node") or 0) for a in n.get("accelerator_info") or [])
+        for n in nodes
+    ]
+    node_count = sum(int(n.get("number_of_nodes") or 0) for n in nodes)
+    provisioned = sum(
+        int(n.get("number_of_nodes") or 0) * a for n, a in zip(nodes, per_node, strict=True)
+    )
+    if not nodes or provisioned <= 0 or len(set(per_node)) != 1:
+        return desc
+
+    summary = desc.get("config_summary")
+    holder = dict(summary) if isinstance(summary, dict) else desc
+    tp, pp, ep, dp = (
+        int(holder.get(name) or desc.get(name) or 1)
+        for name in ("tensor_parallel", "pipeline_parallel", "expert_parallel", "data_parallel")
+    )
+    replica = tp * pp * ep
+    if replica <= provisioned and dp == provisioned // replica:
+        return desc
+
+    holder.update(
+        tensor_parallel=per_node[0],
+        pipeline_parallel=1,
+        expert_parallel=1,
+        data_parallel=node_count,
+    )
+    out = dict(desc)
+    if isinstance(summary, dict):
+        out["config_summary"] = holder
+    else:
+        out = holder
+    return out
 
 
 def _system_description_for(system_dir: Path, legacy_path: Path) -> dict[str, Any]:

@@ -182,7 +182,8 @@ class SystemDescription(BaseModel):
     """Parsed contents of a point's ``system_desc.json`` (§8.2).
 
     Written into every ``r<N>/`` directory since policies PR #119; the points of one
-    curve must agree on everything but ``tps_utilization``.
+    curve must agree on everything but ``tps_utilization`` and the per-point
+    deployment configuration (parallelism, ``batch``, ``config_summary``).
 
     Flat structure: org/system/model/dataset fields at the top level,
     per-node hardware and software metadata in the ``node_types`` list.
