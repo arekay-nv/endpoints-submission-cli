@@ -418,7 +418,8 @@ class SystemPower(_Open):
             published[node_set.node_set_id] = set_published
         nic_per_node_w = self._add_scale_out(out, tally)
         for node_set in self.node_sets:
-            major[node_set.node_set_id] += node_set.nodes_provisioned * nic_per_node_w
+            if self._carries_nics(node_set):
+                major[node_set.node_set_id] += node_set.nodes_provisioned * nic_per_node_w
 
         out.major_components_w = sum(major.values())
         out.published_node_power_w = sum(published.values())
@@ -581,14 +582,76 @@ class SystemPower(_Open):
             tally.estimated.append(f"{label}.energy_per_bit_pj ({energy.source} default)")
         return up.aggregate_bandwidth_tbps * 8.0 * energy.value_pj
 
+    def _carries_nics(self, node_set: NodeSet) -> bool:
+        """Whether counted scale-out NICs are added to *node_set*'s power.
+
+        §4.5.2: a formula-built node has no NIC term, so its NICs MUST be added; a
+        published node figure is assumed to include them and they MUST NOT be added
+        again. ``nics.counted`` is one flag for the whole system, so on a system mixing
+        the two paths it decides only whether the formula-built sets get them. The
+        published sets get them too only where ``excluded_from_published_power``
+        evidences that their figure left the adapters out.
+        """
+        nics = self.scale_out.nics
+        if not self.scale_out.present or nics is None or not nics.counted:
+            return False
+        return node_set.power_method == "component_sum" or bool(nics.excluded_from_published_power)
+
+    def _check_fabric_declared(self, out: PowerComputation) -> None:
+        """E.4: ``present`` follows from whether the nodes need a scale-out fabric.
+
+        E.4 sets ``present: false`` "for a single-node submission, or where the nodes
+        are joined only by a fabric already counted in ``scale_up_network``". So a
+        multi-node system may legitimately declare none — C.2's rack — but only if
+        something in the descriptor joins its nodes:
+
+        - every set built from components with ``scale_up_network.method: none`` has
+          nothing joining its nodes, so ``present: false`` leaves the fabric out;
+        - a published node figure, or a scale-up network, may or may not span nodes,
+          which the descriptor cannot say, so that is a warning;
+        - ``present: true`` on a single node contradicts E.4 but overstates rather
+          than flatters, so that is a warning too.
+        """
+        nodes = sum(s.nodes_provisioned for s in self.node_sets)
+        if self.scale_out.present:
+            if nodes == 1:
+                out.warnings.append(
+                    "scale_out.present is true for a single-node submission; E.4 makes it"
+                    " false there, and the switch power is counted against this node"
+                )
+            return
+        if nodes == 1:
+            return
+        no_scale_up = all(
+            s.power_method == "component_sum"
+            and s.components is not None
+            and s.components.scale_up_network is not None
+            and s.components.scale_up_network.method == "none"
+            for s in self.node_sets
+        )
+        if no_scale_up:
+            out.problems.append(
+                f"scale_out.present is false, but the system has {nodes} nodes and no"
+                " scale-up network joins them; E.4 allows false only for a single node"
+                " or nodes joined by a fabric already counted in scale_up_network"
+            )
+        else:
+            out.warnings.append(
+                f"scale_out.present is false for {nodes} nodes; E.4 allows that only where"
+                " the nodes are joined by a fabric already counted in scale_up_network,"
+                " which the descriptor cannot show"
+            )
+
     def _add_scale_out(self, out: PowerComputation, tally: _Tally) -> float:
         """Add the switches to *out*; return the counted NIC watts **per node**.
 
-        The NICs are major components, so the caller adds them to each set's major
-        figure, where they take the overhead fraction like anything else in the node.
+        The NICs are major components, so the caller adds them to the major figure of
+        each set that carries them (:meth:`_carries_nics`), where they take the
+        overhead fraction like anything else in the node.
         """
         fabric = self.scale_out
         nic_per_node_w = 0.0
+        self._check_fabric_declared(out)
         if not fabric.present:
             return nic_per_node_w
         missing = [
@@ -622,6 +685,25 @@ class SystemPower(_Open):
                 " formula, which has no NIC term — §4.5.2 says the NICs MUST be included"
             )
 
+        # E.4 defines the requirement as the NICs' sum, so a smaller declared figure —
+        # which would let fewer switches through, and so less switch power — is held
+        # to the derived one. A larger one only asks for more switches.
+        from_nics = nodes * nics.count_per_node * nics.bandwidth_per_nic_gbps / 1000.0
+        required = max(fabric.required_bandwidth_tbps, from_nics)
+        if fabric.required_bandwidth_tbps < from_nics - 1e-6:
+            out.problems.append(
+                f"scale_out.required_bandwidth_tbps is {fabric.required_bandwidth_tbps:g},"
+                f" below the {from_nics:g} Tb/s of NIC bandwidth E.4 defines it as"
+                f" ({nodes} nodes × {nics.count_per_node} NICs ×"
+                f" {nics.bandwidth_per_nic_gbps:g} Gb/s)"
+            )
+        elif fabric.required_bandwidth_tbps > from_nics + 1e-6:
+            out.warnings.append(
+                f"scale_out.required_bandwidth_tbps is {fabric.required_bandwidth_tbps:g},"
+                f" above the {from_nics:g} Tb/s the NICs carry ({nodes} nodes ×"
+                f" {nics.count_per_node} NICs × {nics.bandwidth_per_nic_gbps:g} Gb/s)"
+            )
+
         offered = 0.0
         for index, switch in enumerate(fabric.switches):
             label = f"scale_out.switches[{index}].power_per_switch"
@@ -631,18 +713,9 @@ class SystemPower(_Open):
             if watts is not None:
                 out.scale_out_switch_power_w += switch.count * watts
             offered += switch.count * switch.bandwidth_tbps
-        if offered < fabric.required_bandwidth_tbps:
+        if offered < required - 1e-6:
             out.problems.append(
-                f"scale-out switches offer {offered:g} Tb/s, below the required"
-                f" {fabric.required_bandwidth_tbps:g} Tb/s"
-            )
-
-        from_nics = nodes * nics.count_per_node * nics.bandwidth_per_nic_gbps / 1000.0
-        if abs(from_nics - fabric.required_bandwidth_tbps) > 1e-6:
-            out.warnings.append(
-                f"scale_out.required_bandwidth_tbps is {fabric.required_bandwidth_tbps:g},"
-                f" but {nodes} nodes × {nics.count_per_node} NICs ×"
-                f" {nics.bandwidth_per_nic_gbps:g} Gb/s is {from_nics:g} Tb/s"
+                f"scale-out switches offer {offered:g} Tb/s, below the required {required:g} Tb/s"
             )
         return nic_per_node_w
 

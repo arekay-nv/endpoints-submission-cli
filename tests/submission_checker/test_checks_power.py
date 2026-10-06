@@ -295,11 +295,105 @@ class TestScaleOutRules:
         assert any("cabling" in p for p in out.problems)
         assert out.provisioned_power_kw is None
 
-    def test_required_bandwidth_inconsistent_with_nics_warns(self) -> None:
+    def test_understated_required_bandwidth_is_rejected(self) -> None:
+        """E.4 defines the requirement as the NICs' sum; 10 Tb/s would admit one SN4700."""
         data = _edit(DGX_CLUSTER)
-        data["scale_out"]["required_bandwidth_tbps"] = 32.0
+        data["scale_out"]["required_bandwidth_tbps"] = 10.0
+        data["scale_out"]["switches"] = [
+            {
+                "model": "NVIDIA Spectrum SN4700",
+                "count": 1,
+                "bandwidth_tbps": 12.8,
+                "power_per_switch": _sv(630, source_type="mlc_default"),
+            }
+        ]
         out = _compute(data)
-        assert out.warnings and "64 Tb/s" in out.warnings[0]
+        assert out.provisioned_power_kw is None
+        assert any("below the 64 Tb/s of NIC bandwidth" in p for p in out.problems)
+        # The switches are held to the derived requirement, not the declared one.
+        assert any("below the required 64 Tb/s" in p for p in out.problems)
+
+    def test_overstated_required_bandwidth_warns(self) -> None:
+        data = _edit(DGX_CLUSTER)
+        data["scale_out"]["required_bandwidth_tbps"] = 110.0
+        out = _compute(data)
+        assert any("above the 64 Tb/s" in w for w in out.warnings)
+        # A declared figure above the NICs' sum still binds: 2 x 51.2 Tb/s falls short.
+        assert any("102.4 Tb/s, below the required 110 Tb/s" in p for p in out.problems)
+
+    def test_mixed_sets_count_nics_on_formula_nodes_only(self) -> None:
+        """§4.5.2: published node figures already include their NICs."""
+        data = _edit(DGX_CLUSTER)
+        data["node_sets"][0]["nodes_provisioned"] = 5
+        formula = _edit(DGX_B300["node_sets"][0])
+        formula.update(node_set_id=1, system_node_ensemble_id=1, nodes_provisioned=5)
+        data["node_sets"].append(formula)
+        data["scale_out"]["nics"]["counted"] = True
+        del data["computed"], data["provisioned_power_kw"]
+        out = _compute(data)
+        assert not out.problems
+        shares = {s.node_set_id: s.power_w for s in out.sets}
+        assert shares[0] == pytest.approx(5 * 14500)
+        # (700 + 8,800 + 576 + 8 x 75) x 1.50 per node, as in C.11's formula path.
+        assert shares[1] == pytest.approx(5 * 16014)
+
+    def test_evidenced_exclusion_counts_nics_on_published_nodes_too(self) -> None:
+        data = _edit(DGX_CLUSTER)
+        data["node_sets"][0]["nodes_provisioned"] = 5
+        formula = _edit(DGX_B300["node_sets"][0])
+        formula.update(node_set_id=1, system_node_ensemble_id=1, nodes_provisioned=5)
+        data["node_sets"].append(formula)
+        data["scale_out"]["nics"].update(
+            counted=True, excluded_from_published_power="https://example.com/x"
+        )
+        del data["computed"], data["provisioned_power_kw"]
+        shares = {s.node_set_id: s.power_w for s in _compute(data).sets}
+        assert shares[0] == pytest.approx(5 * (14500 + 8 * 75 * 1.5))
+
+
+@pytest.mark.unit
+class TestFabricDeclared:
+    """E.4: ``present`` is false for a single node, or nodes joined by scale-up."""
+
+    def _formula_nodes(self, nodes: int, scale_up: str) -> dict[str, Any]:
+        data = _edit(DGX_B300)
+        del data["declared_provisioned_power"], data["computed"], data["provisioned_power_kw"]
+        data["node_sets"][0]["nodes_provisioned"] = nodes
+        if scale_up == "none":
+            data["node_sets"][0]["components"]["scale_up_network"] = {"method": "none"}
+        return data
+
+    def test_unjoined_nodes_without_a_fabric_are_rejected(self) -> None:
+        out = _compute(self._formula_nodes(4, "none"))
+        assert out.provisioned_power_kw is None
+        assert any("no scale-up network joins them" in p for p in out.problems)
+
+    def test_nodes_with_a_scale_up_network_warn(self) -> None:
+        """C.2's rack is legitimate, but the descriptor cannot show the fabric spans nodes."""
+        out = _compute(self._formula_nodes(4, "bandwidth_estimate"))
+        assert not out.problems
+        assert any("cannot show" in w for w in out.warnings)
+
+    def test_published_nodes_without_a_fabric_warn(self) -> None:
+        data = _edit(DGX_CLUSTER)
+        data["scale_out"] = {"present": False}
+        del data["computed"], data["provisioned_power_kw"]
+        out = _compute(data)
+        assert not out.problems
+        assert any("cannot show" in w for w in out.warnings)
+
+    def test_single_node_needs_no_fabric(self) -> None:
+        out = _compute(self._formula_nodes(1, "none"))
+        assert not out.problems and not out.warnings
+
+    def test_single_node_with_a_fabric_warns(self) -> None:
+        data = _edit(DGX_CLUSTER)
+        data["node_sets"][0]["nodes_provisioned"] = 1
+        data["scale_out"]["required_bandwidth_tbps"] = 6.4
+        del data["computed"], data["provisioned_power_kw"]
+        out = _compute(data)
+        assert not out.problems
+        assert any("single-node" in w for w in out.warnings)
 
 
 @pytest.mark.unit

@@ -316,6 +316,16 @@ Details that are easy to get wrong:
   no NIC term, so a multi-node `component_sum` system must set `nics.counted`; a
   published node figure is assumed to include them, and counting them again is an
   error unless `excluded_from_published_power` evidences the exclusion.
+- **On a system mixing both paths, NICs go only on the formula-built nodes.**
+  `nics.counted` is one flag per system, so it cannot say which sets it means; the
+  published sets get NICs too only where `excluded_from_published_power` is given.
+- **`required_bandwidth_tbps` is the NICs' sum (E.4).** Declaring less is an error,
+  since it would admit fewer switches; declaring more is a warning, and the switches
+  must still cover it.
+- **`scale_out.present` must fit the node count (E.4).** `false` on several nodes is
+  an error where nothing joins them (every set built from components with scale-up
+  `none`), and a warning otherwise, since the descriptor cannot show that a scale-up
+  network or a published node spans the nodes. `true` on a single node is a warning.
 - **A declared figure governs, and only its own sourcing tags the result.**
   `declared_provisioned_power` replaces the computed total; the component block beneath
   it is a cross-check, so its defaults do not set "MLC Estimated Power" and its gaps do
