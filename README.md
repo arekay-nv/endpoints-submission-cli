@@ -464,6 +464,12 @@ declare to match. A benchmark with no entry has no approved drafter, so speculat
 decoding stays disallowed for it (§2.9.4). Point `--approved-drafters FILE` or
 `$MLPERF_ENDPOINTS_APPROVED_DRAFTERS` at a newer published list.
 
+All six initial drafter approvals are recorded against `2026-10-C1`, matching the
+published seed-set cohort. The two-cohort approval lead time makes their earliest
+eligible target cohort `2026-11-C1`.
+Approval cohorts are recorded per drafter, so future additions can carry later
+cohorts in the same registry.
+
 The published sets ship as data (`src/submission_checker/data/seed_sets.yaml`), mirrored
 from the policies repo's `seedset.yaml`. The file's `cohort-id` is the cohort its sets
 were published for; §4.6's four-cohort adoption window is derived from it. Point
