@@ -361,28 +361,28 @@ class SubmissionChecker:
             # cannot fix, so say once that the checker is misconfigured and skip them.
             self._seed_sets = {}
             self._seed_sets_error = str(exc)
-            report.results.append(_warn("seed-set-registry", str(exc), None, "#4.6"))
+            report.results.append(_warn("seed-set-registry", "unavailable", None, detail=str(exc)))
 
         try:
             self._drafters = load_approved_drafters(self.approved_drafters_path)
         except DrafterListError as exc:
             self._drafters = {}
             self._drafters_error = str(exc)
-            report.results.append(_warn("drafter-list-registry", str(exc), None, "#2.9.4"))
+            report.results.append(
+                _warn("drafter-list-registry", "unavailable", None, detail=str(exc))
+            )
 
         if not self.submission_path.exists():
             report.results.append(
                 _err(
                     "path-exists",
-                    f"Submission path does not exist: {self.submission_path}",
+                    "fail",
                     self.submission_path,
-                    "#1",
+                    submission_path=self.submission_path,
                 )
             )
             return report
-        report.results.append(
-            _ok("path-exists", "Submission path exists", self.submission_path, "#1")
-        )
+        report.results.append(_ok("path-exists", "pass", self.submission_path))
 
         submission_dir = SubmissionDir(root=self.submission_path)
         report.results.extend(submission_dir._check_results)
@@ -402,14 +402,7 @@ class SubmissionChecker:
         # system_desc.json.
         system_dirs = [d for d in sorted(results_dir.iterdir()) if d.is_dir()]
         if not system_dirs:
-            report.results.append(
-                _err(
-                    "system-results-dir",
-                    "No results/<system>/ directories found",
-                    results_dir,
-                    "#1",
-                )
-            )
+            report.results.append(_err("system-results-dir", "fail", results_dir))
             return report
 
         for system_dir in system_dirs:
@@ -426,24 +419,9 @@ class SubmissionChecker:
         )
 
         if has_full_accuracy:
-            report.results.append(
-                _ok(
-                    "accuracy-present",
-                    "At least one model has accuracy results",
-                    results_dir,
-                    "#15",
-                )
-            )
+            report.results.append(_ok("accuracy-present", "pass", results_dir))
         else:
-            report.results.append(
-                _err(
-                    "accuracy-present",
-                    "No model in this submission has accuracy results "
-                    "(accuracy_results.json or accuracy_scores in results.json)",
-                    results_dir,
-                    "#15",
-                )
-            )
+            report.results.append(_err("accuracy-present", "fail", results_dir))
 
         return report
 
@@ -490,22 +468,20 @@ class SubmissionChecker:
                 expected = tps / max_tps
                 if abs(util - expected) <= _TPS_UTILIZATION_ABS_TOL:
                     results.append(
-                        _ok(
-                            "tps-utilization",
-                            f"tps_utilization {util:.4f} matches expected {expected:.4f}",
-                            sd_path,
-                            "#8.2",
-                        )
+                        _ok("tps-utilization", "pass", sd_path, util=util, expected=expected)
                     )
                 else:
                     results.append(
                         _err(
                             "tps-utilization",
-                            f"tps_utilization {util} != expected {expected:.4f}"
-                            f" (system_tps {tps:.4f} / curve max {max_tps:.4f} for"
-                            f" {curve}; abs tol {_TPS_UTILIZATION_ABS_TOL})",
+                            "fail",
                             sd_path,
-                            "#8.2",
+                            util=util,
+                            expected=expected,
+                            tps=tps,
+                            max_tps=max_tps,
+                            curve=curve,
+                            tps_utilization_abs_tol=_TPS_UTILIZATION_ABS_TOL,
                         )
                     )
         return results
@@ -530,14 +506,7 @@ class SubmissionChecker:
 
         model_dirs = [d for d in sorted(system_dir.iterdir()) if d.is_dir()]
         if not model_dirs:
-            results.append(
-                _err(
-                    "benchmark-model-dir",
-                    f"No benchmark-model directories in results/{system_id}/",
-                    system_dir,
-                    "#1",
-                )
-            )
+            results.append(_err("benchmark-model-dir", "fail", system_dir, system_id=system_id))
             return results
 
         for model_dir in model_dirs:
@@ -627,25 +596,15 @@ class SubmissionChecker:
         results: list[CheckResult] = []
         path = system_dir / layout.SYSTEM_POWER_JSON
         if not path.is_file() and facts.division in _POWER_OPTIONAL_DIVISIONS:
-            results.append(
-                _ok(
-                    "power-descriptor",
-                    f"No {layout.SYSTEM_POWER_JSON}; power normalisation is not required"
-                    f" for the {facts.division} division",
-                    path,
-                    "#4.5",
-                )
-            )
+            results.append(_ok("power-descriptor", "pass", path, division=facts.division))
             return None, results
         if not path.is_file():
             results.append(
                 _err(
                     "power-descriptor",
-                    f"Missing {layout.SYSTEM_POWER_JSON} for"
-                    f" {system_dir.relative_to(self.submission_path)}; §4.5.2 requires one"
-                    " per system",
+                    "fail",
                     path,
-                    "#4.5.2",
+                    relative_to=system_dir.relative_to(self.submission_path),
                 )
             )
             return None, results
@@ -659,30 +618,22 @@ class SubmissionChecker:
             results.append(
                 _err(
                     "power-descriptor",
-                    f"cooling is {power.cooling!r}, but {layout.SYSTEM_DESC_JSON} describes a"
-                    f" system whose overhead fraction is {facts.overhead:g}; E.2 requires"
-                    " them to agree",
+                    "fail-2",
                     path,
-                    "#4.5.2",
+                    cooling=power.cooling,
+                    overhead=facts.overhead,
                 )
             )
         unknown = sorted({s.system_node_ensemble_id for s in power.node_sets} - facts.ensembles)
         if facts.ensembles and unknown:
-            results.append(
-                _warn(
-                    "power-descriptor",
-                    f"node_sets name system_node_ensemble_id {unknown}, which"
-                    f" {layout.SYSTEM_DESC_JSON} does not describe",
-                    path,
-                    "#4.5.2",
-                )
-            )
+            results.append(_warn("power-descriptor", "warn", path, unknown=unknown))
 
         computation = power.compute(facts.cores)
+        # The power computation words its own findings; they pass through as detail.
         for problem in computation.problems:
-            results.append(_err("power-descriptor", problem, path, "#4.5.2"))
+            results.append(_err("power-descriptor", "computation-problem", path, detail=problem))
         for warning in computation.warnings:
-            results.append(_warn("power-descriptor", warning, path, "#4.5.2"))
+            results.append(_warn("power-descriptor", "computation-warning", path, detail=warning))
         kw = computation.provisioned_power_kw
         if kw is None:
             return None, results
@@ -697,24 +648,10 @@ class SubmissionChecker:
 
         if computation.estimated:
             results.append(
-                _warn(
-                    "power-estimated",
-                    "MLC Estimated Power: "
-                    + "; ".join(computation.estimated)
-                    + " — Appendix D values reach provisioned_power_kw",
-                    path,
-                    "#4.5.2",
-                )
+                _warn("power-estimated", "warn", path, estimates="; ".join(computation.estimated))
             )
         if not computation.problems:
-            results.append(
-                _ok(
-                    "power-descriptor",
-                    f"Provisioned power {kw:.2f} kW",
-                    path,
-                    "#4.5.2",
-                )
-            )
+            results.append(_ok("power-descriptor", "pass-2", path, kw=kw))
         return computation, results
 
     # ------------------------------------------------------------------
@@ -846,10 +783,9 @@ class SubmissionChecker:
                 results.append(
                     _err(
                         "measurement-points-present",
-                        f"Missing {layout.POINT_YAML} in"
-                        f" {point_dir.relative_to(self.submission_path)}/",
+                        "fail-2",
                         yaml_path,
-                        "#1",
+                        relative_to=point_dir.relative_to(self.submission_path),
                     )
                 )
                 unparsed.append(
@@ -870,10 +806,11 @@ class SubmissionChecker:
                 results.append(
                     _warn(
                         "point-dirname-concurrency",
-                        f"{point_dir.name}/: directory concurrency {dir_concurrency}"
-                        f" ≠ declared {config.concurrency}",
+                        "warn",
                         yaml_path,
-                        "#1",
+                        point_dir_name=point_dir.name,
+                        dir_concurrency=dir_concurrency,
+                        concurrency=config.concurrency,
                     )
                 )
 
@@ -883,10 +820,9 @@ class SubmissionChecker:
             results.append(
                 _err(
                     "measurement-points-present",
-                    f"No usable r<N>/{layout.POINT_YAML} files in"
-                    f" {point_dirs[0].parent.relative_to(self.submission_path)}",
+                    "fail",
                     point_dirs[0].parent,
-                    "#1",
+                    relative_to=point_dirs[0].parent.relative_to(self.submission_path),
                 )
             )
         return loaded, unparsed, results
@@ -912,34 +848,21 @@ class SubmissionChecker:
                 results.append(
                     _err(
                         "system-description-present",
-                        f"Missing {layout.SYSTEM_DESC_JSON} in {rel}/{point_dir.name}/",
+                        "fail-2",
                         sd_path,
-                        "#8.2",
+                        rel=rel,
+                        point_dir_name=point_dir.name,
                     )
                 )
                 continue
             data = _read_json(sd_path)
             if data is None:
-                results.append(
-                    _err(
-                        "system-description-valid",
-                        f"{layout.SYSTEM_DESC_JSON} is not readable as a JSON object",
-                        sd_path,
-                        "#8.2",
-                    )
-                )
+                results.append(_err("system-description-valid", "fail", sd_path))
                 continue
             present.append((sd_path, data))
 
         if not present:
-            results.append(
-                _err(
-                    "system-description-present",
-                    f"No readable {layout.SYSTEM_DESC_JSON} under {rel}/",
-                    model_dir,
-                    "#8.2",
-                )
-            )
+            results.append(_err("system-description-present", "fail", model_dir, rel=rel))
             return None, None, results
 
         ref_path, ref_data = present[0]
@@ -949,14 +872,7 @@ class SubmissionChecker:
         results.extend(load_results)
         if system_desc is None:
             return None, ref_path, results
-        results.append(
-            _ok(
-                "system-description-valid",
-                f"System description valid for {rel}",
-                ref_path,
-                "#8.2",
-            )
-        )
+        results.append(_ok("system-description-valid", "pass", ref_path, rel=rel))
         return system_desc, ref_path, results
 
     def _check_system_desc_consistency(
@@ -977,20 +893,14 @@ class SubmissionChecker:
             return [
                 _err(
                     "system-description-consistency",
-                    f"{layout.SYSTEM_DESC_JSON} differs from {ref_path.parent.name}/ in:"
-                    f" {', '.join(differing)}"
-                    " — every point of a curve must describe the same system",
+                    "fail",
                     sd_path,
-                    "#8.5",
+                    ref_path_parent_name=ref_path.parent.name,
+                    differing=", ".join(differing),
                 )
             ]
         return [
-            _ok(
-                "system-description-consistency",
-                f"{len(present)} point(s) agree on the system description",
-                model_dir,
-                "#8.5",
-            )
+            _ok("system-description-consistency", "pass", model_dir, present_count=len(present))
         ]
 
     def _derive_regions(
@@ -1011,38 +921,14 @@ class SubmissionChecker:
         """
         results: list[CheckResult] = []
         if c_max is None:
-            results.append(
-                _warn(
-                    "region-basis",
-                    "max_supported_concurrency could not be read from"
-                    f" {layout.SYSTEM_DESC_JSON}, so C_max is unknown and the"
-                    " region-dependent checks were not run for this curve",
-                    sd_path or model_dir,
-                    "#5.4",
-                )
-            )
+            results.append(_warn("region-basis", "warn", sd_path or model_dir))
             return None, results
-        results.append(
-            _ok(
-                "max-concurrency-declared",
-                f"max_supported_concurrency = {c_max}",
-                sd_path or model_dir,
-                "#7",
-            )
-        )
+        results.append(_ok("max-concurrency-declared", "pass", sd_path or model_dir, c_max=c_max))
 
         borrowed = [u.concurrency for u in unparsed if u.concurrency is not None]
         concurrencies = [point.config.concurrency for point in loaded] + borrowed
         if not concurrencies:
-            results.append(
-                _err(
-                    "region-basis",
-                    "No point's concurrency could be read — C_min cannot be derived, so"
-                    " no region-dependent check can run for this curve",
-                    model_dir,
-                    "#5.4",
-                )
-            )
+            results.append(_err("region-basis", "fail", model_dir))
             return None, results
 
         lowest = min(concurrencies)
@@ -1061,26 +947,34 @@ class SubmissionChecker:
             results.append(
                 _warn(
                     "region-basis",
-                    f"C_min = {c_min}{clamped} derived from {len(concurrencies)} of"
-                    f" {point_dir_count} points{note} — the rest have no readable concurrency",
+                    "warn-2",
                     model_dir,
-                    "#5.4",
+                    c_min=c_min,
+                    clamped=clamped,
+                    concurrencies_count=len(concurrencies),
+                    point_dir_count=point_dir_count,
+                    note=note,
                 )
             )
         else:
             results.append(
                 _ok(
                     "region-basis",
-                    f"C_min = {c_min}{clamped} derived from all {point_dir_count} points{note}",
+                    "pass",
                     model_dir,
-                    "#5.4",
+                    c_min=c_min,
+                    clamped=clamped,
+                    point_dir_count=point_dir_count,
+                    note=note,
                 )
             )
 
         try:
             regions = compute_regions(c_max, c_min)
         except ValueError as exc:
-            results.append(_err("region-computation", str(exc), sd_path or model_dir, "#5.5"))
+            results.append(
+                _err("region-computation", "fail", sd_path or model_dir, detail=str(exc))
+            )
             return None, results
         return regions, results
 
@@ -1113,10 +1007,10 @@ class SubmissionChecker:
             results.append(
                 _err(
                     "result-summary-present",
-                    f"Missing {layout.RESULT_SUMMARY_JSON} for r{point.config.concurrency}:"
-                    f" {summary_path.relative_to(self.submission_path)}",
+                    "fail",
                     summary_path,
-                    "#1",
+                    concurrency=point.config.concurrency,
+                    relative_to=summary_path.relative_to(self.submission_path),
                 )
             )
             return results
@@ -1160,10 +1054,10 @@ class SubmissionChecker:
             results.append(
                 _err(
                     "result-summary-present",
-                    f"Missing {layout.RESULT_SUMMARY_JSON} for {point.point_dir.name}:"
-                    f" {summary_path.relative_to(self.submission_path)}",
+                    "fail-2",
                     summary_path,
-                    "#1",
+                    point_dir_name=point.point_dir.name,
+                    relative_to=summary_path.relative_to(self.submission_path),
                 )
             )
         else:
@@ -1171,12 +1065,7 @@ class SubmissionChecker:
             results.extend(load_results)
         results.append(
             _warn(
-                "point-rules-skipped",
-                f"{point.point_dir.name}/: {layout.POINT_YAML} is missing or invalid, so the"
-                " rules that read it (region placement, metric consistency, power) were not"
-                " run for this point; fixing it may report more",
-                point.yaml_path,
-                "#1",
+                "point-rules-skipped", "warn", point.yaml_path, point_dir_name=point.point_dir.name
             )
         )
         return results
@@ -1263,20 +1152,25 @@ class SubmissionChecker:
         results: list[CheckResult] = []
         for name, path in seen.items():
             if name in _ALLOWED_MODEL_NAMES:
-                results.append(
-                    _ok(
-                        "model-name-valid", f"model_name {name!r} is an allowed model", path, "#3.2"
-                    )
-                )
+                results.append(_ok("model-name-valid", "pass", path, name=name))
             else:
-                message = (
-                    f"model_name {name!r} is not an allowed model; must be exactly one"
-                    f" of: {', '.join(_ALLOWED_MODEL_NAMES)}"
-                )
+                allowed = ", ".join(_ALLOWED_MODEL_NAMES)
                 canonical = layout.canonical_model_name(name)
                 if canonical in _ALLOWED_MODEL_NAMES:
-                    message += f" (write {canonical!r})"
-                results.append(_err("model-name-valid", message, path, "#3.2"))
+                    results.append(
+                        _err(
+                            "model-name-valid",
+                            "noncanonical",
+                            path,
+                            name=name,
+                            canonical=canonical,
+                            allowed=allowed,
+                        )
+                    )
+                else:
+                    results.append(
+                        _err("model-name-valid", "fail", path, name=name, allowed=allowed)
+                    )
         return results
 
     def _check_shared_paths(self, loaded: list[_LoadedPoint]) -> list[CheckResult]:
@@ -1307,21 +1201,23 @@ class SubmissionChecker:
                 results.append(
                     _err(
                         "shared-path-resolution",
-                        f"{field_name} {value!r} does not resolve to a directory under the"
-                        " submission root (paths must be root-relative and free of '..');"
-                        f" named by {where}",
+                        "fail",
                         points[0].yaml_path,
-                        "#9.1",
+                        field_name=field_name,
+                        value=value,
+                        where=where,
                     )
                 )
             else:
                 results.append(
                     _ok(
                         "shared-path-resolution",
-                        f"{field_name} {value!r} resolves to"
-                        f" {resolved.relative_to(self.submission_path)}/ ({where})",
+                        "pass",
                         points[0].yaml_path,
-                        "#9.1",
+                        field_name=field_name,
+                        value=value,
+                        relative_to=resolved.relative_to(self.submission_path),
+                        where=where,
                     )
                 )
         return results

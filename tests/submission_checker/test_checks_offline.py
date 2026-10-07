@@ -375,7 +375,7 @@ class TestAccuracyCoverage:
             for r in ctx._check_results
             if r.rule == "accuracy-coverage" and r.severity == Severity.ERROR
         ]
-        assert hits and "high concurrency" in hits[0].message
+        assert hits and "High Concurrency" in hits[0].message
 
     def test_clustering_in_one_band_does_not_satisfy_the_count(self, tmp_path: Path) -> None:
         """Five accuracy runs all in High Concurrency is five runs, not coverage."""

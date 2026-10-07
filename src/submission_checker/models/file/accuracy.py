@@ -69,9 +69,7 @@ class AccuracyResult(RootModel[dict[str, dict[str, Any]]]):
     @model_validator(mode="after")
     def _check_not_empty(self) -> AccuracyResult:
         if not self.root:
-            self._check_results.append(
-                err("accuracy-valid", "accuracy_result.json is empty", None, "#4.3")
-            )
+            self._check_results.append(err("accuracy-valid", "fail", None))
         return self
 
     #: Per-entry bookkeeping keys that are not accuracy metrics.

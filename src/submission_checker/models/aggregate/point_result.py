@@ -67,19 +67,25 @@ class PointResult(BaseModel):
             self._check_results.append(
                 warn(
                     "point-duration",
-                    f"Point {c} ({region}): {basis} duration {duration_ms:.0f} ms"
-                    f" < minimum {min_ms} ms",
+                    "warn",
                     summary_path,
-                    "#11",
+                    c=c,
+                    region=region,
+                    basis=basis,
+                    duration_ms=duration_ms,
+                    min_ms=min_ms,
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "point-duration",
-                    f"Point {c}: {basis} duration {duration_ms:.0f} ms meets minimum for {region}",
+                    "pass",
                     summary_path,
-                    "#11",
+                    c=c,
+                    basis=basis,
+                    duration_ms=duration_ms,
+                    region=region,
                 )
             )
         return self
@@ -102,47 +108,27 @@ class PointResult(BaseModel):
         block = self.config.steady_state
         c = self.config.concurrency
         if block is None:
-            self._check_results.append(
-                warn(
-                    "steady-state-basis",
-                    f"Point {c}: no steady_state block; metrics are whole-run, which §4.4"
-                    " makes the fallback rather than the official basis",
-                    path,
-                    "#4.4",
-                )
-            )
+            self._check_results.append(warn("steady-state-basis", "warn", path, c=c))
             return self
 
         if block.is_official:
             self._check_results.append(
-                ok(
-                    "steady-state-basis",
-                    f"Point {c}: official result is the steady-state window"
-                    f" ({block.window.super_passes or '?'} super-passes)",
-                    path,
-                    "#4.4",
-                )
+                ok("steady-state-basis", "pass", path, c=c, value=block.window.super_passes or "?")
             )
         else:
             self._check_results.append(
-                warn(
-                    "steady-state-basis",
-                    f"Point {c}: status {block.status!r} — official result falls back to"
-                    " whole-run `total`; steady-state numbers are low-confidence (§4.4)",
-                    path,
-                    "#4.4",
-                )
+                warn("steady-state-basis", "warn-2", path, c=c, status=block.status)
             )
 
         if block.verdict in ("drifting_up", "drifting_down"):
             self._check_results.append(
                 warn(
                     "steady-state-basis",
-                    f"Point {c}: verdict {block.verdict!r} — §4.4 reports a drifting gating"
-                    f" metric as a range or slope, never as a point estimate"
-                    + (f" ({', '.join(block.drifting_metrics)})" if block.drifting_metrics else ""),
+                    "drifting-metrics" if block.drifting_metrics else "drifting",
                     path,
-                    "#4.4",
+                    c=c,
+                    verdict=block.verdict,
+                    metrics=", ".join(block.drifting_metrics),
                 )
             )
         return self
@@ -164,18 +150,22 @@ class PointResult(BaseModel):
             self._check_results.append(
                 err(
                     "min-query-count",
-                    f"Dataset '{dataset}': completed {completed} < minimum {min_queries} (§6.4)",
+                    "fail",
                     summary_path,
-                    "#12",
+                    dataset=dataset,
+                    completed=completed,
+                    min_queries=min_queries,
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "min-query-count",
-                    f"Dataset '{dataset}': completed {completed} ≥ minimum {min_queries}",
+                    "pass",
                     summary_path,
-                    "#12",
+                    dataset=dataset,
+                    completed=completed,
+                    min_queries=min_queries,
                 )
             )
         return self
@@ -200,21 +190,11 @@ class PointResult(BaseModel):
         """Emit ok/err for the duration_ns > 0 invariant (§14)."""
         if s.duration_ns <= 0:
             self._check_results.append(
-                err(
-                    "metric-consistency-duration",
-                    f"duration_ns is not positive: {s.duration_ns}",
-                    path,
-                    "#14",
-                )
+                err("metric-consistency-duration", "fail", path, duration_ns=s.duration_ns)
             )
         else:
             self._check_results.append(
-                ok(
-                    "metric-consistency-duration",
-                    f"duration_ns={s.duration_ns:.0f} ns",
-                    path,
-                    "#14",
-                )
+                ok("metric-consistency-duration", "pass", path, duration_ns=s.duration_ns)
             )
 
     def _check_sample_accounting(self, s: PointSummary, path: Path | None) -> None:
@@ -228,19 +208,21 @@ class PointResult(BaseModel):
                 self._check_results.append(
                     err(
                         "metric-consistency-accounting",
-                        f"completed ({s.n_samples_completed}) + failed ({s.n_samples_failed})"
-                        f" = {accounted} ≠ issued ({s.n_samples_issued})",
+                        "fail",
                         path,
-                        "#14",
+                        n_samples_completed=s.n_samples_completed,
+                        n_samples_failed=s.n_samples_failed,
+                        accounted=accounted,
+                        n_samples_issued=s.n_samples_issued,
                     )
                 )
             else:
                 self._check_results.append(
                     ok(
                         "metric-consistency-accounting",
-                        f"Sample accounting consistent: {s.n_samples_issued} issued",
+                        "pass",
                         path,
-                        "#14",
+                        n_samples_issued=s.n_samples_issued,
                     )
                 )
 
@@ -250,18 +232,18 @@ class PointResult(BaseModel):
             self._check_results.append(
                 err(
                     "metric-consistency-output-tokens",
-                    f"total_output_tokens is negative: {s.total_output_tokens}",
+                    "fail",
                     path,
-                    "#14",
+                    total_output_tokens=s.total_output_tokens,
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "metric-consistency-output-tokens",
-                    f"total_output_tokens={s.total_output_tokens}",
+                    "pass",
                     path,
-                    "#14",
+                    total_output_tokens=s.total_output_tokens,
                 )
             )
 
@@ -279,20 +261,22 @@ class PointResult(BaseModel):
                 self._check_results.append(
                     err(
                         "metric-consistency-system-tps",
-                        f"stored system_tps {stored:.3f} ≠ derived {derived:.3f}"
-                        f" (rel err {rel_err:.1%})",
+                        "fail",
                         path,
-                        "#9.1",
+                        stored=stored,
+                        derived=derived,
+                        rel_err=rel_err,
                     )
                 )
                 return
         self._check_results.append(
             ok(
                 "metric-consistency-system-tps",
-                f"system_tps={derived:.3f} tok/s"
-                f" ({s.total_output_tokens} tokens / {s.elapsed_duration_seconds:.1f}s)",
+                "pass",
                 path,
-                "#9.1",
+                derived=derived,
+                total_output_tokens=s.total_output_tokens,
+                elapsed_duration_seconds=s.elapsed_duration_seconds,
             )
         )
 
@@ -306,35 +290,12 @@ class PointResult(BaseModel):
         """
         p90 = s.tpot_p90_ms
         if p90 is None:
-            self._check_results.append(
-                err(
-                    "metric-consistency-tpot-p90",
-                    "No TPOT P90 reported (result_summary.json has no tpot.percentiles['90']);"
-                    " tps_per_user is defined as 1000 / tpot_p90_ms and has no other source",
-                    path,
-                    "#9.1",
-                )
-            )
+            self._check_results.append(err("metric-consistency-tpot-p90", "fail", path))
             return
         if not math.isfinite(p90) or p90 <= 0:
-            self._check_results.append(
-                err(
-                    "metric-consistency-tpot-p90",
-                    f"Reported TPOT P90 is {p90}, which is not finite and strictly positive",
-                    path,
-                    "#9.1",
-                )
-            )
+            self._check_results.append(err("metric-consistency-tpot-p90", "fail-2", path, p90=p90))
             return
-        self._check_results.append(
-            ok(
-                "metric-consistency-tpot-p90",
-                f"Reported TPOT P90 = {p90:.4f} ms (distribution itself is not verifiable"
-                " from the summary)",
-                path,
-                "#9.1",
-            )
-        )
+        self._check_results.append(ok("metric-consistency-tpot-p90", "pass", path, p90=p90))
 
     def _check_tps_per_user(self, s: PointSummary, concurrency: int, path: Path | None) -> None:
         """§9.1: ``tps_per_user = 1000 / tpot_p90_ms``.
@@ -357,20 +318,16 @@ class PointResult(BaseModel):
                 self._check_results.append(
                     err(
                         "metric-consistency-tps-per-user",
-                        f"stored tps_per_user {stored:.4f} ≠ derived 1000 / tpot_p90_ms"
-                        f" {derived:.4f} (rel err {rel_err:.1%})",
+                        "fail",
                         path,
-                        "#9.1",
+                        stored=stored,
+                        derived=derived,
+                        rel_err=rel_err,
                     )
                 )
                 return
         self._check_results.append(
-            ok(
-                "metric-consistency-tps-per-user",
-                f"tps_per_user={derived:.4f} tok/s/user (1000 / tpot_p90_ms {p90:.4f})",
-                path,
-                "#9.1",
-            )
+            ok("metric-consistency-tps-per-user", "pass", path, derived=derived, p90=p90)
         )
 
     def _check_agentic_metrics(self, s: PointSummary, path: Path | None) -> None:
@@ -384,14 +341,7 @@ class PointResult(BaseModel):
         if derived is None:
             if stored is not None:
                 self._check_results.append(
-                    err(
-                        "agentic-metric-consistency",
-                        f"e2e_avg_interactivity {stored!r} is reported, but the summary states"
-                        " no output_tokens_per_turn_total / e2e_turn_time_seconds_total to"
-                        " derive it from (§4.1)",
-                        path,
-                        "#4.1",
-                    )
+                    err("agentic-metric-consistency", "fail", path, stored=stored)
                 )
             return
         if stored is not None:
@@ -400,21 +350,15 @@ class PointResult(BaseModel):
                 self._check_results.append(
                     err(
                         "agentic-metric-consistency",
-                        f"stored e2e_avg_interactivity {float(stored):.4f} ≠ derived"
-                        f" {derived:.4f} (rel err {rel_err:.1%})",
+                        "fail-2",
                         path,
-                        "#4.1",
+                        stored=float(stored),
+                        derived=derived,
+                        rel_err=rel_err,
                     )
                 )
                 return
-        self._check_results.append(
-            ok(
-                "agentic-metric-consistency",
-                f"e2e_avg_interactivity={derived:.4f} tok/s across completed turns",
-                path,
-                "#4.1",
-            )
-        )
+        self._check_results.append(ok("agentic-metric-consistency", "pass", path, derived=derived))
 
     @model_validator(mode="after")
     def _check_metric_consistency(self, info: ValidationInfo) -> PointResult:

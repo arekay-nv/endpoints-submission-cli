@@ -49,6 +49,13 @@ _MANDATORY_BANDS = (
     "med_concurrency",
     "high_concurrency",
 )
+#: How each mandatory band is named to a submitter (§3–6's region names).
+_BAND_LABELS = {
+    "ultra_low_concurrency": "Ultra Low Concurrency",
+    "low_concurrency": "Low Concurrency",
+    "med_concurrency": "Medium Concurrency",
+    "high_concurrency": "High Concurrency",
+}
 _MIN_POINTS = 7
 _MAX_POINTS = 32
 
@@ -162,22 +169,19 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 err(
                     "benchmark-type-consistency",
-                    "Points disagree on `runtime_settings.load_pattern` ("
-                    + ", ".join(repr(lp) for lp in patterns)
-                    + "); §8.5 defines one result as a single benchmark, and §5.3/§5.7"
-                    " apply differently to agentic and single-turn benchmarks",
+                    "fail",
                     self.points_dir,
-                    "#6.1, #8.5",
+                    patterns=", ".join(repr(lp) for lp in patterns),
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "benchmark-type-consistency",
-                    f"Benchmark type consistent: {patterns[0]!r}"
-                    f" ({'agentic' if self.is_agentic else 'single-turn'})",
+                    "pass",
                     self.points_dir,
-                    "#6.1, #8.5",
+                    patterns=patterns[0],
+                    value="agentic" if self.is_agentic else "single-turn",
                 )
             )
         return self
@@ -205,25 +209,13 @@ class ModelContext(BaseModel):
         minimum = self.min_points
         if n < minimum:
             self._check_results.append(
-                err(
-                    "point-count",
-                    f"Only {n} measurement point(s) — minimum {minimum} required",
-                    self.points_dir,
-                    "#2, #8",
-                )
+                err("point-count", "fail", self.points_dir, n=n, minimum=minimum)
             )
         else:
-            self._check_results.append(
-                ok("point-count", f"Point count OK: {n}", self.points_dir, "#2, #8")
-            )
+            self._check_results.append(ok("point-count", "pass", self.points_dir, n=n))
         if n > _MAX_POINTS:
             self._check_results.append(
-                err(
-                    "point-cap",
-                    f"{n} points exceed the {_MAX_POINTS}-point cap",
-                    self.points_dir,
-                    "#2, #8",
-                )
+                err("point-cap", "fail", self.points_dir, n=n, max_points=_MAX_POINTS)
             )
         return self
 
@@ -244,32 +236,20 @@ class ModelContext(BaseModel):
             if declared:
                 listed = ", ".join(f"r{c.concurrency}" for _, c in declared)
                 self._check_results.append(
-                    err(
-                        "offline-point-present",
-                        f"Agentic benchmark declares an Offline point ({listed}); §5.7 says"
-                        " an agentic submission “neither requires nor may include” one",
-                        self.points_dir,
-                        "#5.7",
-                    )
+                    err("offline-point-present", "fail-3", self.points_dir, listed=listed)
                 )
             else:
-                self._check_results.append(
-                    ok(
-                        "offline-point-present",
-                        "Agentic benchmark: no Offline point, as §5.7 requires",
-                        self.points_dir,
-                        "#5.7",
-                    )
-                )
+                self._check_results.append(ok("offline-point-present", "pass-2", self.points_dir))
             return self
         if len(declared) > 1:
             listed = ", ".join(f"r{c.concurrency}" for _, c in declared)
             self._check_results.append(
                 err(
                     "offline-point-present",
-                    f"{len(declared)} points declare `offline` ({listed}); §5.7 allows exactly one",
+                    "fail",
                     self.points_dir,
-                    "#5.7",
+                    declared_count=len(declared),
+                    listed=listed,
                 )
             )
             return self
@@ -277,12 +257,9 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 err(
                     "offline-point-present",
-                    "No point declares `offline`; §5.3 requires one for every non-agentic"
-                    " submission. An agentic submission declares"
-                    f" `runtime_settings.load_pattern: {LOAD_PATTERN_AGENTIC}`, which this"
-                    " curve does not",
+                    "fail-2",
                     self.points_dir,
-                    "#5.7",
+                    load_pattern_agentic=LOAD_PATTERN_AGENTIC,
                 )
             )
             return self
@@ -294,19 +271,20 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     err(
                         "offline-point-present",
-                        f"`offline: elected` is declared at concurrency {config.concurrency},"
-                        f" but §5.7.2 elects the C_max point and C_max = {c_max}",
+                        "fail-4",
                         self.points_dir,
-                        "#5.7.2",
+                        concurrency=config.concurrency,
+                        c_max=c_max,
                     )
                 )
                 return self
         self._check_results.append(
             ok(
                 "offline-point-present",
-                f"Offline point: r{config.concurrency} ({config.offline})",
+                "pass",
                 self.points_dir,
-                "#5.7",
+                concurrency=config.concurrency,
+                offline=config.offline,
             )
         )
         return self
@@ -342,9 +320,10 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 warn(
                     "offline-ordering",
-                    f"Offline concurrency {offline_config.concurrency} < C_max {c_max} (§5.7.2)",
+                    "warn",
                     self.points_dir,
-                    "#5.7.2",
+                    concurrency=offline_config.concurrency,
+                    c_max=c_max,
                 )
             )
         if offline_tps is None or c_max_tps is None:
@@ -355,20 +334,24 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 warn(
                     "offline-ordering",
-                    f"Offline system_tps {offline_tps:.3f} < {_OFFLINE_TPS_MARGIN:.2f} ×"
-                    f" C_max system_tps {c_max_tps:.3f} = {floor:.3f} (§5.7.2)",
+                    "warn-2",
                     self.points_dir,
-                    "#5.7.2",
+                    offline_tps=offline_tps,
+                    offline_tps_margin=_OFFLINE_TPS_MARGIN,
+                    c_max_tps=c_max_tps,
+                    floor=floor,
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "offline-ordering",
-                    f"Offline system_tps {offline_tps:.3f} ≥ {floor:.3f}"
-                    f" and concurrency {offline_config.concurrency} ≥ C_max {c_max}",
+                    "pass",
                     self.points_dir,
-                    "#5.7.2",
+                    offline_tps=offline_tps,
+                    floor=floor,
+                    concurrency=offline_config.concurrency,
+                    c_max=c_max,
                 )
             )
         return self
@@ -388,10 +371,10 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 ok(
                     "ultra-low-concurrency-coverage",
-                    f"Ultra Low Concurrency covered: {sorted(ultra_low)}"
-                    f" (≤ {ULTRA_LOW_CONCURRENCY_MAX})",
+                    "pass",
                     self.points_dir,
-                    "#5.4",
+                    ultra_low=sorted(ultra_low),
+                    ultra_low_concurrency_max=ULTRA_LOW_CONCURRENCY_MAX,
                 )
             )
         else:
@@ -400,9 +383,10 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 err(
                     "ultra-low-concurrency-coverage",
-                    f"No point at concurrency ≤ {ULTRA_LOW_CONCURRENCY_MAX} ({detail})",
+                    "fail",
                     self.points_dir,
-                    "#5.4",
+                    ultra_low_concurrency_max=ULTRA_LOW_CONCURRENCY_MAX,
+                    detail=detail,
                 )
             )
         return self
@@ -445,19 +429,16 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     ok(
                         rule,
-                        f"{label} region covered: {sorted(matching)} (range {bounds})",
+                        "pass",
                         self.points_dir,
-                        "#3–6",
+                        label=label,
+                        covered=sorted(matching),
+                        bounds=bounds,
                     )
                 )
             else:
                 self._check_results.append(
-                    err(
-                        rule,
-                        f"No point in {label} region (concurrency {bounds})",
-                        self.points_dir,
-                        "#3–6",
-                    )
+                    err(rule, "fail", self.points_dir, label=label, bounds=bounds)
                 )
         return self
 
@@ -490,10 +471,9 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 warn(
                     "model-name-consistency",
-                    f"No point declares model_name, so the model directory"
-                    f" '{self.model_dir.name}' cannot be checked against §8.1",
+                    "warn",
                     self.model_dir,
-                    "#8.1",
+                    model_dir_name=self.model_dir.name,
                 )
             )
         else:
@@ -502,19 +482,15 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     err(
                         "model-name-consistency",
-                        f"Declared model '{declared}' does not match model directory '{dir_name}'",
+                        "fail",
                         self.model_dir,
-                        "#8.1",
+                        declared=declared,
+                        dir_name=dir_name,
                     )
                 )
             else:
                 self._check_results.append(
-                    ok(
-                        "model-name-consistency",
-                        f"Model name consistent: {dir_name}",
-                        self.model_dir,
-                        "#8.1",
-                    )
+                    ok("model-name-consistency", "pass", self.model_dir, dir_name=dir_name)
                 )
         return self
 
@@ -531,42 +507,25 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 err(
                     "config-consistency-model",
-                    "Points disagree on model_name ("
-                    + ", ".join(repr(n) for n in sorted(names))
-                    + "); §8.5 defines one result as a single benchmark model",
+                    "fail",
                     self.model_dir,
-                    "#9.1",
+                    names=", ".join(repr(n) for n in sorted(names)),
                 )
             )
         elif names:
             self._check_results.append(
-                ok(
-                    "config-consistency-model",
-                    f"Model consistent: {next(iter(names))}",
-                    self.model_dir,
-                    "#9.1",
-                )
+                ok("config-consistency-model", "pass", self.model_dir, next=next(iter(names)))
             )
         if not self.loaded_points:
             return self
         datasets = {config.dataset for config, _ in self.loaded_points}
         if len(datasets) > 1:
             self._check_results.append(
-                err(
-                    "config-consistency-dataset",
-                    f"Inconsistent datasets across points: {datasets}",
-                    self.model_dir,
-                    "#9.1",
-                )
+                err("config-consistency-dataset", "fail", self.model_dir, datasets=datasets)
             )
         else:
             self._check_results.append(
-                ok(
-                    "config-consistency-dataset",
-                    f"Dataset consistent: {next(iter(datasets))}",
-                    self.model_dir,
-                    "#9.1",
-                )
+                ok("config-consistency-dataset", "pass", self.model_dir, next=next(iter(datasets)))
             )
         return self
 
@@ -604,22 +563,19 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 err(
                     "accuracy-coverage",
-                    "No accuracy results at a point in: "
-                    + ", ".join(b.replace("_", " ") for b in missing)
-                    + " (§5.3 requires accuracy at each of the four mandatory points)",
+                    "missing-bands",
                     self.points_dir,
-                    "#5.3",
+                    bands=", ".join(_BAND_LABELS[band] for band in missing),
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "accuracy-coverage",
-                    "Accuracy present in all four mandatory bands"
-                    f" ({len(self.accuracy_by_point)} point(s) carry results;"
-                    f" §5.3 N={4 if self.is_agentic else 5})",
+                    "pass",
                     self.points_dir,
-                    "#5.3",
+                    accuracy_by_point_count=len(self.accuracy_by_point),
+                    value=4 if self.is_agentic else 5,
                 )
             )
 
@@ -628,19 +584,15 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     ok(
                         "accuracy-coverage",
-                        f"Offline point r{config.concurrency} carries accuracy results",
+                        "pass-2",
                         self.points_dir,
-                        "#5.3",
+                        concurrency=config.concurrency,
                     )
                 )
             else:
                 self._check_results.append(
                     err(
-                        "accuracy-coverage",
-                        f"Offline point r{config.concurrency} has no accuracy results;"
-                        " §5.3 counts it among the N required points",
-                        self.points_dir,
-                        "#5.3",
+                        "accuracy-coverage", "fail", self.points_dir, concurrency=config.concurrency
                     )
                 )
         return self
@@ -667,10 +619,11 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 err(
                     rule,
-                    f"r{concurrency}: `{dataset}` score {value} is not a fraction in [0, 1],"
-                    " which is what the reference scorer reports",
+                    "score-not-fraction",
                     self.points_dir,
-                    "#4.3",
+                    concurrency=concurrency,
+                    dataset=dataset,
+                    value=value,
                 )
             )
             return None
@@ -690,26 +643,12 @@ class ModelContext(BaseModel):
         targets = get_agentic_targets(self.model_dir.name)
         if targets is None:
             self._check_results.append(
-                warn(
-                    "agentic-accuracy",
-                    f"Agentic curve for model '{self.model_dir.name}', which is not one of"
-                    " the agentic benchmarks the reference implementation publishes"
-                    " thresholds for — no agentic accuracy gate applied",
-                    self.model_dir,
-                    "#3.2",
-                )
+                warn("agentic-accuracy", "warn", self.model_dir, model_dir_name=self.model_dir.name)
             )
             return self
         if not targets.published:
             self._check_results.append(
-                warn(
-                    "agentic-accuracy",
-                    f"{targets.name}: the reference implementation records its accuracy"
-                    " thresholds and SWE-bench evaluation policy as TBD, so no agentic"
-                    " accuracy gate can be applied to this submission",
-                    self.model_dir,
-                    "#3.2",
-                )
+                warn("agentic-accuracy", "warn-2", self.model_dir, targets_name=targets.name)
             )
             return self
         self._gate_agentic_inline(targets)
@@ -730,30 +669,32 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     err(
                         "agentic-accuracy-inline",
-                        f"r{concurrency}: inline accuracy {score:.2f} <"
-                        f" {targets.inline_min} required for {targets.name}",
+                        "fail",
                         self.points_dir,
-                        "#4.3",
+                        concurrency=concurrency,
+                        score=score,
+                        inline_min=targets.inline_min,
+                        targets_name=targets.name,
                     )
                 )
             else:
                 self._check_results.append(
                     ok(
                         "agentic-accuracy-inline",
-                        f"r{concurrency}: inline accuracy {score:.2f} ≥ {targets.inline_min}",
+                        "pass",
                         self.points_dir,
-                        "#4.3",
+                        concurrency=concurrency,
+                        score=score,
+                        inline_min=targets.inline_min,
                     )
                 )
         if not seen:
             self._check_results.append(
                 warn(
                     "agentic-accuracy-inline",
-                    f"No point reports a `{INLINE_DATASET}` accuracy score; official"
-                    " agentic submissions set `accuracy_config.eval_method:"
-                    " agentic_inference_inline` on the performance dataset",
+                    "warn",
                     self.points_dir,
-                    "#4.3",
+                    inline_dataset=INLINE_DATASET,
                 )
             )
 
@@ -801,10 +742,9 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 warn(
                     "agentic-accuracy-swebench",
-                    f"No mandatory-band point reports a `{SWEBENCH_DATASET}` accuracy"
-                    " score; official agentic submissions must enable SWE-bench accuracy",
+                    "warn",
                     self.points_dir,
-                    "#4.3",
+                    swebench_dataset=SWEBENCH_DATASET,
                 )
             )
             return
@@ -814,11 +754,11 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     warn(
                         "agentic-accuracy-swebench",
-                        f"{band.replace('_', ' ')} has {len(results)} SWE-bench results"
-                        f" ({listed}); §4.3 expects one per region, so they are averaged"
-                        " into one value for the band",
+                        "warn-2",
                         self.points_dir,
-                        "#4.3",
+                        replace=band.replace("_", " "),
+                        results_count=len(results),
+                        listed=listed,
                     )
                 )
         band_scores = [
@@ -835,30 +775,35 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 err(
                     "agentic-accuracy-swebench",
-                    f"SWE-bench {basis} = {mean:.2f} < {targets.swebench_min} required for"
-                    f" {targets.name}",
+                    "fail",
                     self.points_dir,
-                    "#4.3",
+                    basis=basis,
+                    mean=mean,
+                    swebench_min=targets.swebench_min,
+                    targets_name=targets.name,
                 )
             )
         elif n != SWEBENCH_MEAN_OF_N:
             self._check_results.append(
                 warn(
                     "agentic-accuracy-swebench",
-                    f"SWE-bench {basis} = {mean:.2f} ≥ {targets.swebench_min}, but §4.3"
-                    f" averages one result from each of the {SWEBENCH_MEAN_OF_N} mandatory"
-                    " regions",
+                    "warn-3",
                     self.points_dir,
-                    "#4.3",
+                    basis=basis,
+                    mean=mean,
+                    swebench_min=targets.swebench_min,
+                    swebench_mean_of_n=SWEBENCH_MEAN_OF_N,
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "agentic-accuracy-swebench",
-                    f"SWE-bench {basis} = {mean:.2f} ≥ {targets.swebench_min}",
+                    "pass",
                     self.points_dir,
-                    "#4.3",
+                    basis=basis,
+                    mean=mean,
+                    swebench_min=targets.swebench_min,
                 )
             )
 
@@ -887,20 +832,25 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     ok(
                         "agentic-osl-range",
-                        f"r{config.concurrency}: full-run OSL per-turn mean {avg:.1f} within"
-                        f" {low:g}–{high:g} tokens",
+                        "pass",
                         self.points_dir,
-                        "#4.3",
+                        concurrency=config.concurrency,
+                        avg=avg,
+                        low=low,
+                        high=high,
                     )
                 )
             else:
                 self._check_results.append(
                     err(
                         "agentic-osl-range",
-                        f"r{config.concurrency}: full-run OSL per-turn mean {avg:.1f} outside"
-                        f" {low:g}–{high:g} tokens required for {targets.name}",
+                        "fail",
                         self.points_dir,
-                        "#4.3",
+                        concurrency=config.concurrency,
+                        avg=avg,
+                        low=low,
+                        high=high,
+                        targets_name=targets.name,
                     )
                 )
         if missing:
@@ -908,11 +858,10 @@ class ModelContext(BaseModel):
             self._check_results.append(
                 warn(
                     "agentic-osl-range",
-                    f"No `{OSL_FULL_RUN_FIELD}.output_sequence_lengths.avg` in"
-                    f" result_summary.json for {listed}; the windowed"
-                    " `output_sequence_lengths` is explicitly not the field to gate",
+                    "warn",
                     self.points_dir,
-                    "#4.3",
+                    osl_full_run_field=OSL_FULL_RUN_FIELD,
+                    listed=listed,
                 )
             )
 
@@ -925,6 +874,15 @@ class ModelContext(BaseModel):
         """
         if not self.accuracy_by_point:
             return self  # file missing/invalid already reported by checker.py
+        if self.is_agentic and get_agentic_targets(self.model_dir.name) is not None:
+            return self  # gated by _check_agentic_accuracy, which aggregates differently
+        if get_thresholds(self.model_dir.name) is None:
+            # A fact about the model, so said once for the curve rather than once for
+            # every point that carries accuracy.
+            self._check_results.append(
+                warn("accuracy-gate", "no-thresholds", self.model_dir, model=self.model_dir.name)
+            )
+            return self
         for concurrency in sorted(self.accuracy_by_point):
             self._gate_accuracy(self.accuracy_by_point[concurrency])
         return self
@@ -936,22 +894,9 @@ class ModelContext(BaseModel):
             if self.accuracy_dir
             else (self.model_dir / "results.json")
         )
-        if self.is_agentic and get_agentic_targets(self.model_dir.name) is not None:
-            return  # gated by _check_agentic_accuracy, which aggregates differently
         target = get_thresholds(self.model_dir.name)
-
         if target is None:
-            self._check_results.append(
-                warn(
-                    "accuracy-gate",
-                    f"No accuracy thresholds defined for model '{self.model_dir.name}'"
-                    " — skipping gate check",
-                    json_path,
-                    "#15",
-                )
-            )
-            return
-
+            return  # reported once for the curve by _check_accuracy
         thresholds, min_queries = target
         root = accuracy_result.root
 
@@ -985,18 +930,22 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     err(
                         "accuracy-sample-count",
-                        f"{total} samples{suffix} < required {min_queries}",
+                        "fail",
                         json_path,
-                        "#15",
+                        total=total,
+                        suffix=suffix,
+                        min_queries=min_queries,
                     )
                 )
             else:
                 self._check_results.append(
                     ok(
                         "accuracy-sample-count",
-                        f"{total} samples{suffix} ≥ required {min_queries}",
+                        "pass",
                         json_path,
-                        "#15",
+                        total=total,
+                        suffix=suffix,
+                        min_queries=min_queries,
                     )
                 )
 
@@ -1023,14 +972,7 @@ class ModelContext(BaseModel):
         if list(agg_scores) == ["score"] and len(thresholds) == 1:
             only_metric = next(iter(thresholds))
             self._check_results.append(
-                warn(
-                    "accuracy-gate",
-                    f"results.json exposes only an unnamed scalar accuracy score; "
-                    f"gating it as '{only_metric}'. Secondary metrics (if any) are not "
-                    f"present in results.json and are not checked.",
-                    json_path,
-                    "#15",
-                )
+                warn("accuracy-gate", "warn-2", json_path, only_metric=only_metric)
             )
             agg_scores = {only_metric: agg_scores["score"]}
 
@@ -1055,18 +997,22 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     err(
                         "accuracy-gate",
-                        f"{matched_key} = {score:.4f} < min {lower:.4f}",
+                        "fail",
                         json_path,
-                        "#15",
+                        matched_key=matched_key,
+                        score=score,
+                        lower=lower,
                     )
                 )
             elif upper is not None and score > upper:
                 self._check_results.append(
                     err(
                         "accuracy-gate",
-                        f"{matched_key} = {score:.4f} > max {upper:.4f}",
+                        "fail-2",
                         json_path,
-                        "#15",
+                        matched_key=matched_key,
+                        score=score,
+                        upper=upper,
                     )
                 )
             else:
@@ -1074,9 +1020,11 @@ class ModelContext(BaseModel):
                 self._check_results.append(
                     ok(
                         "accuracy-gate",
-                        f"{matched_key} = {score:.4f} PASSED (target {bound})",
+                        "pass",
                         json_path,
-                        "#15",
+                        matched_key=matched_key,
+                        score=score,
+                        bound=bound,
                     )
                 )
         return

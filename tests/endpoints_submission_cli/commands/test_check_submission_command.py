@@ -81,7 +81,9 @@ class TestCheckSubmission:
         result = _runner.invoke(app, ["check-submission", "--annotate", str(_FAILING)], env=_NO_CI)
         assert result.exit_code == 1
         assert "::error " in result.stderr
-        assert "title=submission-checker:" in result.stderr
+        # Titled with the rule's title and spec section, not its id twice.
+        assert "title=Low Concurrency coverage (§§3–6)::" in result.stderr
+        assert "[low-concurrency-coverage]" not in result.stderr
 
     def test_no_annotate_by_default_outside_ci(self) -> None:
         result = _runner.invoke(app, ["check-submission", str(_FAILING)], env=_NO_CI)
@@ -183,3 +185,53 @@ class TestCheckSubmissionOrdering:
         assert "| 🔴 error |" in text[errors:details]
         assert "🟡 warning" not in text[errors:details]
         assert "| 🟡 warning |" in text[details : _first_index(text, "</details>")]
+
+
+@pytest.mark.unit
+class TestCheckSubmissionWording:
+    """Titles, fixes and grouping come from the message catalog."""
+
+    def test_annotations_carry_the_fix(self) -> None:
+        result = _runner.invoke(app, ["check-submission", "--annotate", str(_FAILING)], env=_NO_CI)
+        coverage = next(
+            line for line in result.stderr.splitlines() if "title=Low Concurrency coverage" in line
+        )
+        assert "%0A%0AFix: Add a point with concurrency in" in coverage
+
+    def test_table_shows_titles_and_fixes(self) -> None:
+        result = _runner.invoke(app, ["check-submission", str(_FAILING)], env=_GITHUB)
+        out = result.stdout
+        assert "Benchmark model name" in out
+        assert "Fix: Set model_name in every point.yaml" in out
+
+    def test_missing_thresholds_are_reported_once_per_curve(self) -> None:
+        result = _runner.invoke(app, ["check-submission", "--json", str(_FAILING)], env=_NO_CI)
+        gate = [r for r in json.loads(result.stdout)["results"] if r["key"] == "no-thresholds"]
+        assert len(gate) == 1
+
+    def test_step_summary_has_titles_and_fixes(self, tmp_path: Path) -> None:
+        summary = tmp_path / "summary.md"
+        _runner.invoke(
+            app,
+            ["check-submission", str(_FAILING)],
+            env={"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": str(summary)},
+        )
+        text = summary.read_text()
+        assert "| Severity | Check | Message | Path |" in text
+        assert "Benchmark model name (§3.2)<br><sub>`model-name-valid`</sub>" in text
+        assert "<br>**Fix:** Set model_name in every point.yaml" in text
+
+
+@pytest.mark.unit
+class TestFindingGrouping:
+    def test_identical_results_become_one_row_with_a_count(self) -> None:
+        from endpoints_submission_cli.commands.check_submission import _findings
+        from submission_checker.models import err
+
+        results = [
+            err("point-dirs", "fail-2", Path(f"/s/r{c}"), rel=f"results/x/r{c}") for c in (1, 2)
+        ] + [err("src-dir", "fail", Path(f"/s/{n}")) for n in ("a", "b", "c")]
+
+        (first, second, third) = _findings(results)
+        assert (first.count, second.count, third.count) == (1, 1, 3)
+        assert third.message().endswith("(×3)")

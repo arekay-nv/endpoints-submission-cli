@@ -15,11 +15,14 @@ log groups (collapsed by default), and the job summary does the same with a
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from submission_checker.checker import SubmissionChecker
 from submission_checker.models import CheckResult, Report, Severity
@@ -78,20 +81,35 @@ def _rel_to_cwd(path: Path) -> str:
         return str(path)
 
 
+def _check_title(result: CheckResult) -> str:
+    """The rule's title, with its spec section when it has one."""
+    title = result.title or result.rule
+    return f"{title} ({result.spec_ref})" if result.spec_ref else title
+
+
 def _emit_github_annotations(report: Report) -> None:
     """Emit ``::error``/``::warning`` workflow commands so findings show up inline.
+
+    Titled with the rule's title and spec section; the body is the message and,
+    where the catalog has one, the fix. A finding repeated on the same file is
+    annotated once.
 
     Written to stderr: GitHub Actions parses workflow commands from the merged
     step log, so stdout stays clean for ``--json`` machine consumption.
     """
+    seen: set[tuple[object, ...]] = set()
     for result in report.results:
         if result.severity == Severity.INFO:
             continue
-        props = [f"title=submission-checker: {_gha_escape(result.rule, prop=True)}"]
+        identity = (result.severity, result.rule, result.message, result.path)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        props = [f"title={_gha_escape(_check_title(result), prop=True)}"]
         if result.path is not None:
             props.insert(0, f"file={_gha_escape(_rel_to_cwd(result.path), prop=True)}")
-        ref = f" ({result.spec_ref})" if result.spec_ref else ""
-        message = _gha_escape(f"[{result.rule}] {result.message}{ref}", prop=False)
+        body = result.message + (f"\n\nFix: {result.fix}" if result.fix else "")
+        message = _gha_escape(body, prop=False)
         click.echo(f"::{_GITHUB_LEVEL[result.severity]} {','.join(props)}::{message}", err=True)
 
 
@@ -100,13 +118,51 @@ def _by_severity(results: list[CheckResult]) -> list[CheckResult]:
     return sorted(results, key=lambda r: _SEVERITY_ORDER[r.severity])
 
 
+@dataclass
+class _Finding:
+    """Identical results (same rule, wording and fix) shown as one row."""
+
+    result: CheckResult
+    paths: list[Path | None]
+
+    @property
+    def count(self) -> int:
+        return len(self.paths)
+
+    def message(self) -> str:
+        return self.result.message + (f" (×{self.count})" if self.count > 1 else "")
+
+
+def _findings(results: list[CheckResult]) -> list[_Finding]:
+    """Group identical results, errors first, keeping first-seen order."""
+    groups: dict[tuple[object, ...], _Finding] = {}
+    for r in _by_severity(results):
+        identity = (r.severity, r.rule, r.message, r.fix)
+        if identity in groups:
+            groups[identity].paths.append(r.path)
+        else:
+            groups[identity] = _Finding(r, [r.path])
+    return list(groups.values())
+
+
+def _where(finding: _Finding, show: Callable[[Path], str]) -> str:
+    first = finding.paths[0]
+    loc = show(first) if first is not None else ""
+    return loc + (f" (+{finding.count - 1} more)" if finding.count > 1 else "")
+
+
+def _md(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
 def _summary_table(results: list[CheckResult]) -> list[str]:
-    lines = ["| Severity | Rule | § Ref | Message | Path |", "| --- | --- | --- | --- | --- |"]
-    for r in results:
-        loc = _rel_to_cwd(r.path) if r.path else ""
-        msg = r.message.replace("|", "\\|").replace("\n", " ")
+    lines = ["| Severity | Check | Message | Path |", "| --- | --- | --- | --- |"]
+    for finding in _findings(results):
+        r = finding.result
+        check = f"{_md(_check_title(r))}<br><sub>`{r.rule}`</sub>"
+        msg = _md(finding.message()) + (f"<br>**Fix:** {_md(r.fix)}" if r.fix else "")
         severity = f"{_SUMMARY_MARKER[r.severity]} {r.severity.value}"
-        lines.append(f"| {severity} | {r.rule} | {r.spec_ref} | {msg} | {loc} |")
+        lines.append(f"| {severity} | {check} | {msg} | {_md(_where(finding, _rel_to_cwd))} |")
     return lines
 
 
@@ -147,27 +203,29 @@ def _write_step_summary(report: Report, path: Path, summary_file: Path) -> None:
 
 def _render_table(results: list[CheckResult], path: Path, title: str) -> Table:
     table = Table(title=title, show_lines=True)
-    table.add_column("Rule", style="cyan", no_wrap=True)
-    table.add_column("§ Ref", style="dim", no_wrap=True)
+    table.add_column("Check", no_wrap=True)
     table.add_column("Severity", no_wrap=True)
     table.add_column("Message")
     table.add_column("Path", style="dim")
 
-    for result in _by_severity(results):
+    def show(p: Path) -> str:
+        return str(p.relative_to(path)) if p.is_relative_to(path) else str(p)
+
+    for finding in _findings(results):
+        result = finding.result
         style = _SEVERITY_STYLE[result.severity]
-        loc = (
-            str(result.path.relative_to(path))
-            if result.path and result.path.is_relative_to(path)
-            else str(result.path or "")
-        )
+        check = Text(_check_title(result))
+        check.append(f"\n{result.rule}", style="dim")
+        message = Text(finding.message())
+        if result.fix:
+            message.append(f"\nFix: {result.fix}", style="italic")
         # Errors and warnings colour the whole row; info only dims its severity.
         row_style = style if result.severity != Severity.INFO else None
         table.add_row(
-            result.rule,
-            result.spec_ref,
+            check,
             f"[{style}]{result.severity.value}[/{style}]",
-            result.message,
-            loc,
+            message,
+            _where(finding, show),
             style=row_style,
         )
     return table

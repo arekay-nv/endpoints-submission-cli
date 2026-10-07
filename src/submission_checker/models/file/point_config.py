@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ...messages import fragment
+
 __all__ = ["DpShortfall", "NodesUsed", "PointConfig", "RuntimeSettings", "WarmupSpec"]
 
 from pydantic import (
@@ -340,16 +342,14 @@ class PointConfig(BaseModel):
             self._check_results.append(
                 err(
                     "offline-declared",
-                    f"Invalid offline {self.offline!r}: must be one of"
-                    f" {', '.join(sorted(_VALID_OFFLINE))}",
+                    "fail",
                     path,
-                    "#5.7",
+                    offline=self.offline,
+                    valid_offline=", ".join(sorted(_VALID_OFFLINE)),
                 )
             )
         else:
-            self._check_results.append(
-                ok("offline-declared", f"offline={self.offline!r}", path, "#5.7")
-            )
+            self._check_results.append(ok("offline-declared", "pass", path, offline=self.offline))
         return self
 
     @model_validator(mode="after")
@@ -363,28 +363,41 @@ class PointConfig(BaseModel):
         bad: list[str] = []
         if block.status is not None and block.status not in STEADY_STATE_STATUSES:
             bad.append(
-                f"status {block.status!r} (expected one of {', '.join(STEADY_STATE_STATUSES)})"
+                fragment(
+                    "steady-state-valid",
+                    "status-expected-one",
+                    status=block.status,
+                    steady_state_statuses=", ".join(STEADY_STATE_STATUSES),
+                )
             )
         if block.verdict is not None and block.verdict not in STEADY_STATE_VERDICTS:
             bad.append(
-                f"verdict {block.verdict!r} (expected one of {', '.join(STEADY_STATE_VERDICTS)})"
+                fragment(
+                    "steady-state-valid",
+                    "verdict-expected-one",
+                    verdict=block.verdict,
+                    steady_state_verdicts=", ".join(STEADY_STATE_VERDICTS),
+                )
             )
         for metric, state in sorted(block.state.items()):
             if state not in GATING_STATES:
                 bad.append(
-                    f"state[{metric}] {state!r} (expected one of {', '.join(GATING_STATES)})"
+                    fragment(
+                        "steady-state-valid",
+                        "state-expected-one",
+                        metric=metric,
+                        state=state,
+                        gating_states=", ".join(GATING_STATES),
+                    )
                 )
 
         if bad:
-            self._check_results.append(err("steady-state-valid", "; ".join(bad), path, "#4.4"))
+            self._check_results.append(
+                err("steady-state-valid", "fail", path, problems="; ".join(bad))
+            )
         else:
             self._check_results.append(
-                ok(
-                    "steady-state-valid",
-                    f"steady_state status={block.status!r} verdict={block.verdict!r}",
-                    path,
-                    "#4.4",
-                )
+                ok("steady-state-valid", "pass", path, status=block.status, verdict=block.verdict)
             )
         return self
 
@@ -408,33 +421,39 @@ class PointConfig(BaseModel):
         if block.status == OFFICIAL_STATUS:
             if spans is not None and spans < MIN_TREND_N:
                 problems.append(
-                    f"status 'windowable' over {spans} super-pass(es);"
-                    f" §4.4 needs ≥ {MIN_TREND_N} (MIN_TREND_N)"
+                    fragment(
+                        "steady-state-consistency",
+                        "status-windowable-over-super",
+                        spans=spans,
+                        min_trend_n=MIN_TREND_N,
+                    )
                 )
             drifting = block.drifting_metrics
             if drifting:
                 problems.append(
-                    f"status 'windowable' with drifting gating metric(s):"
-                    f" {', '.join(drifting)}; §4.4 requires every one to be a Plateau"
+                    fragment(
+                        "steady-state-consistency",
+                        "status-windowable-drifting-gating",
+                        drifting=", ".join(drifting),
+                    )
                 )
         elif block.status == "insufficient_passes" and spans is not None and spans >= MIN_TREND_N:
             problems.append(
-                f"status 'insufficient_passes' over {spans} super-pass(es),"
-                f" which meets the ≥ {MIN_TREND_N} floor"
+                fragment(
+                    "steady-state-consistency",
+                    "status-insufficient-passes-over",
+                    spans=spans,
+                    min_trend_n=MIN_TREND_N,
+                )
             )
 
         if problems:
             self._check_results.append(
-                err("steady-state-consistency", "; ".join(problems), path, "#4.4")
+                err("steady-state-consistency", "fail", path, problems="; ".join(problems))
             )
         else:
             self._check_results.append(
-                ok(
-                    "steady-state-consistency",
-                    f"steady_state status {block.status!r} consistent with the reported window",
-                    path,
-                    "#4.4",
-                )
+                ok("steady-state-consistency", "pass", path, status=block.status)
             )
         return self
 
@@ -449,17 +468,10 @@ class PointConfig(BaseModel):
         ]
         if missing:
             self._check_results.append(
-                err(
-                    "point-disclosure-complete",
-                    f"point.yaml is missing required §8.3 field(s): {', '.join(missing)}",
-                    path,
-                    "#8.3",
-                )
+                err("point-disclosure-complete", "fail", path, missing=", ".join(missing))
             )
         else:
-            self._check_results.append(
-                ok("point-disclosure-complete", "All §8.3 disclosure fields present", path, "#8.3")
-            )
+            self._check_results.append(ok("point-disclosure-complete", "pass", path))
         return self
 
     @model_validator(mode="after")
@@ -470,16 +482,11 @@ class PointConfig(BaseModel):
             return self  # absence is reported by point-disclosure-complete
         if _COHORT_RE.fullmatch(self.target_cohort):
             self._check_results.append(
-                ok("target-cohort", f"target_cohort='{self.target_cohort}'", path, "#4.6")
+                ok("target-cohort", "pass", path, target_cohort=self.target_cohort)
             )
         else:
             self._check_results.append(
-                err(
-                    "target-cohort",
-                    f"target_cohort '{self.target_cohort}' is not of the form YYYY-MM-C0/C1",
-                    path,
-                    "#4.6",
-                )
+                err("target-cohort", "fail", path, target_cohort=self.target_cohort)
             )
         return self
 
@@ -505,20 +512,21 @@ class PointConfig(BaseModel):
                 self._check_results.append(
                     err(
                         "seed-config-legacy",
-                        f"Point {self.concurrency}: {field_name} = {val!r}; v0.7 required 42"
-                        " and v1.0 requires a declared seed_set (§4.6) — neither is satisfied",
+                        "fail",
                         path,
-                        "#4.6",
+                        concurrency=self.concurrency,
+                        field_name=field_name,
+                        val=val,
                     )
                 )
             else:
                 self._check_results.append(
                     warn(
                         "seed-config-legacy",
-                        f"Point {self.concurrency}: {field_name} = 42 with no seed_set declared;"
-                        " v1.0 binds seeds to a published set (§4.6)",
+                        "warn",
                         path,
-                        "#4.6",
+                        concurrency=self.concurrency,
+                        field_name=field_name,
                     )
                 )
         return self
@@ -529,21 +537,11 @@ class PointConfig(BaseModel):
         path: Path | None = (info.context or {}).get("yaml_path")
         if self.warmup is None:
             self._check_results.append(
-                err(
-                    "warmup-present",
-                    f"Point {self.concurrency}: missing warmup declaration (§6.3.3)",
-                    path,
-                    "#6.3.3",
-                )
+                err("warmup-present", "fail", path, concurrency=self.concurrency)
             )
         else:
             self._check_results.append(
-                ok(
-                    "warmup-present",
-                    f"Point {self.concurrency}: warmup declaration present",
-                    path,
-                    "#6.3.3",
-                )
+                ok("warmup-present", "pass", path, concurrency=self.concurrency)
             )
         return self
 
@@ -560,13 +558,7 @@ class PointConfig(BaseModel):
             return self  # absence is reported by warmup-present
         if self.warmup.is_disabled:
             self._check_results.append(
-                ok(
-                    "warmup-logs-retained",
-                    f"Point {self.concurrency}: no warmup requests;"
-                    " no warmup request logs required",
-                    path,
-                    "#6.3.2",
-                )
+                ok("warmup-logs-retained", "pass", path, concurrency=self.concurrency)
             )
             return self
         retained = self.warmup.logs_retained
@@ -574,31 +566,19 @@ class PointConfig(BaseModel):
             self._check_results.append(
                 ok(
                     "warmup-logs-retained",
-                    f"Point {self.concurrency}: warmup logs declared retained"
-                    + (f" ({self.warmup.link_logs})" if self.warmup.link_logs else ""),
+                    "retained-link" if self.warmup.link_logs else "retained",
                     path,
-                    "#6.3.2",
+                    concurrency=self.concurrency,
+                    link=self.warmup.link_logs,
                 )
             )
         elif retained is False:
             self._check_results.append(
-                warn(
-                    "warmup-logs-retained",
-                    f"Point {self.concurrency}: warmup logs declared NOT retained;"
-                    " §6.3.2 requires them to remain available for reviewer inspection",
-                    path,
-                    "#6.3.2",
-                )
+                warn("warmup-logs-retained", "warn", path, concurrency=self.concurrency)
             )
         else:
             self._check_results.append(
-                warn(
-                    "warmup-logs-retained",
-                    f"Point {self.concurrency}: warmup block does not declare logs_retained,"
-                    " so §6.3.2 log retention cannot be confirmed",
-                    path,
-                    "#6.3.2",
-                )
+                warn("warmup-logs-retained", "warn-2", path, concurrency=self.concurrency)
             )
         return self
 
@@ -609,12 +589,7 @@ class PointConfig(BaseModel):
         warmup_block = self.runtime_settings.warmup
         if warmup_block is not None and warmup_block.salt is True:
             self._check_results.append(
-                warn(
-                    "warmup-salt",
-                    f"Point {self.concurrency}: warmup salt is enabled",
-                    path,
-                    "#6.3.3",
-                )
+                warn("warmup-salt", "warn", path, concurrency=self.concurrency)
             )
         return self
 
@@ -631,42 +606,26 @@ class PointConfig(BaseModel):
         path: Path | None = (info.context or {}).get("yaml_path")
         lp = self.runtime_settings.load_pattern
         if self.offline == OFFLINE_DEDICATED:
-            self._check_results.append(
-                ok(
-                    "load-pattern",
-                    f"Offline point: load pattern {lp!r} exempt from fixed concurrency",
-                    path,
-                    "#6.1",
-                )
-            )
+            self._check_results.append(ok("load-pattern", "pass", path, lp=lp))
             return self
         if lp not in _VALID_LOAD_PATTERNS:
             self._check_results.append(
                 err(
                     "load-pattern",
-                    f"Point {self.concurrency}: load_pattern {lp!r} is not one of §6.1's"
-                    f" fixed-concurrency patterns ({', '.join(sorted(_VALID_LOAD_PATTERNS))})",
+                    "fail",
                     path,
-                    "#10",
+                    concurrency=self.concurrency,
+                    lp=lp,
+                    valid_load_patterns=", ".join(sorted(_VALID_LOAD_PATTERNS)),
                 )
             )
         elif self.concurrency <= 0:
             self._check_results.append(
-                err(
-                    "load-pattern",
-                    f"concurrency must be positive, got {self.concurrency}",
-                    path,
-                    "#10",
-                )
+                err("load-pattern", "fail-2", path, concurrency=self.concurrency)
             )
         else:
             self._check_results.append(
-                ok(
-                    "load-pattern",
-                    f"Point {self.concurrency}: load pattern OK ({lp})",
-                    path,
-                    "#10",
-                )
+                ok("load-pattern", "pass-2", path, concurrency=self.concurrency, lp=lp)
             )
         return self
 
@@ -677,11 +636,10 @@ class PointConfig(BaseModel):
         self._check_results.append(
             ok(
                 "streaming-config",
-                f"Point {self.concurrency}: stream_all_chunks="
-                f"{self.runtime_settings.stream_all_chunks} controls client IPC forwarding;"
-                " server streaming cannot be verified from this flag",
+                "pass",
                 path,
-                "#6.5",
+                concurrency=self.concurrency,
+                stream_all_chunks=self.runtime_settings.stream_all_chunks,
             )
         )
         return self
@@ -703,11 +661,12 @@ class PointConfig(BaseModel):
             self._check_results.append(
                 err(
                     "region-declared",
-                    f"Invalid region '{region}': must be one of {sorted(_VALID_REGIONS)}",
+                    "fail",
                     path,
-                    "#8.3",
+                    region=region,
+                    valid_regions=sorted(_VALID_REGIONS),
                 )
             )
             return self
-        self._check_results.append(ok("region-declared", f"region='{region}'", path, "#8.3"))
+        self._check_results.append(ok("region-declared", "pass", path, region=region))
         return self

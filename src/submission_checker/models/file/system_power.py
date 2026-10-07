@@ -38,6 +38,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ...messages import fragment
 from ...power_defaults import (
     PowerDefault,
     accelerator_default,
@@ -357,7 +358,9 @@ class _Tally:
         if value is not None:
             watts = value.watts
             if watts is None:
-                self.problems.append(f"{label} is an energy figure; give value_w or value_kw")
+                self.problems.append(
+                    fragment("power-descriptor", "energy-figure-give-value", label=label)
+                )
                 return None
             if value.is_default:
                 self.estimated.append(f"{label} ({value.source} default)")
@@ -365,7 +368,7 @@ class _Tally:
         if fallback is not None:
             self.estimated.append(f"{label} (absent; auto-populated from {fallback.source})")
             return fallback.watts
-        self.gaps.append(f"{label} is absent and Appendix D has no default for it")
+        self.gaps.append(fragment("power-descriptor", "absent-appendix-d-has", label=label))
         return None
 
 
@@ -407,7 +410,7 @@ class SystemPower(_Open):
 
         ids = [s.node_set_id for s in self.node_sets]
         if len(set(ids)) != len(ids):
-            out.problems.append("node_set_id values must be unique within the file")
+            out.problems.append(fragment("power-descriptor", "node-set-id-values"))
 
         # Each set's own major and published watts, kept apart for §4.5.3's P_s.
         major: dict[int, float] = {}
@@ -449,7 +452,7 @@ class SystemPower(_Open):
             out.declared = True
             watts = declared.watts
             if watts is None:
-                out.problems.append("declared_provisioned_power must give value_kw or value_w")
+                out.problems.append(fragment("power-descriptor", "declared-provisioned-power-give"))
             else:
                 out.provisioned_power_kw = round(watts / _W_PER_KW, 2)
                 if declared.is_default:
@@ -480,7 +483,9 @@ class SystemPower(_Open):
         y = node_set.nodes_provisioned
         if node_set.power_method == "component_sum":
             if node_set.components is None:
-                out.problems.append(f"{label}: component_sum requires components")
+                out.problems.append(
+                    fragment("power-descriptor", "component-sum-requires-components", label=label)
+                )
                 return 0.0, 0.0
             per_node = self._per_node_w(
                 node_set.components, cores.get(node_set.system_node_ensemble_id), label, tally
@@ -488,7 +493,14 @@ class SystemPower(_Open):
             return (0.0 if per_node is None else y * per_node), 0.0
 
         if node_set.published_power is None:
-            out.problems.append(f"{label}: {node_set.power_method} requires published_power")
+            out.problems.append(
+                fragment(
+                    "power-descriptor",
+                    "requires-published-power",
+                    label=label,
+                    power_method=node_set.power_method,
+                )
+            )
             return 0.0, 0.0
         published = tally.watts(f"{label}.published_power", node_set.published_power)
         if published is None:
@@ -498,8 +510,7 @@ class SystemPower(_Open):
         n = node_set.nodes_in_published_rack
         if n is None or n <= y:
             out.problems.append(
-                f"{label}: node_scaling requires nodes_in_published_rack greater than"
-                f" nodes_provisioned ({y}), got {n}"
+                fragment("power-descriptor", "node-scaling-requires-nodes", label=label, y=y, n=n)
             )
             return 0.0, 0.0
         return 0.0, published * (y / n)
@@ -515,8 +526,7 @@ class SystemPower(_Open):
         if components.combined_cpu_accelerator is not None:
             if (cpu and cpu.tdp_per_unit) or (acc and acc.tdp_per_unit):
                 tally.problems.append(
-                    f"{label}: combined_cpu_accelerator is mutually exclusive with"
-                    " cpu.tdp_per_unit and accelerator.tdp_per_unit"
+                    fragment("power-descriptor", "combined-cpu-accelerator-mutually", label=label)
                 )
             parts.append(
                 tally.watts(
@@ -526,7 +536,7 @@ class SystemPower(_Open):
         else:
             if cpu is None or acc is None:
                 tally.problems.append(
-                    f"{label}: needs cpu and accelerator, or combined_cpu_accelerator"
+                    fragment("power-descriptor", "needs-cpu-accelerator-combined", label=label)
                 )
                 return None
             cpu_w = tally.watts(
@@ -543,8 +553,7 @@ class SystemPower(_Open):
         up = components.scale_up_network
         if up is None:
             tally.problems.append(
-                f"{label}: scale_up_network is required; use method none where there is no"
-                " scale-up switch"
+                fragment("power-descriptor", "scale-up-network-required", label=label)
             )
             return None
         parts.append(SystemPower._scale_up_w(up, f"{label}.scale_up_network", tally))
@@ -558,7 +567,9 @@ class SystemPower(_Open):
             return 0.0
         if up.method == "declared_tdp":
             if up.switch_count is None:
-                tally.problems.append(f"{label}: declared_tdp requires switch_count")
+                tally.problems.append(
+                    fragment("power-descriptor", "declared-tdp-requires-switch", label=label)
+                )
                 return None
             per_switch = tally.watts(f"{label}.tdp_per_switch", up.tdp_per_switch)
             return None if per_switch is None else up.switch_count * per_switch
@@ -566,17 +577,16 @@ class SystemPower(_Open):
         # as terabytes per second — 14.4 TB/s × 8 bit/B × 5 pJ/bit = 576 W — despite
         # the field's `_tbps` suffix, so that is how it is read here.
         if up.aggregate_bandwidth_tbps is None:
-            tally.problems.append(f"{label}: bandwidth_estimate requires aggregate_bandwidth_tbps")
+            tally.problems.append(
+                fragment("power-descriptor", "bandwidth-estimate-requires-aggregate", label=label)
+            )
             return None
         energy = up.energy_per_bit_pj
         if energy is None:
-            tally.gaps.append(
-                f"{label}.energy_per_bit_pj is absent; D.1's references depend on the link"
-                " protocol, so there is no default to apply"
-            )
+            tally.gaps.append(fragment("power-descriptor", "energy-per-bit-pj", label=label))
             return None
         if energy.value_pj is None:
-            tally.problems.append(f"{label}.energy_per_bit_pj must give value_pj")
+            tally.problems.append(fragment("power-descriptor", "energy-per-bit-pj-2", label=label))
             return None
         if energy.is_default:
             tally.estimated.append(f"{label}.energy_per_bit_pj ({energy.source} default)")
@@ -615,10 +625,7 @@ class SystemPower(_Open):
         nodes = sum(s.nodes_provisioned for s in self.node_sets)
         if self.scale_out.present:
             if nodes == 1:
-                out.warnings.append(
-                    "scale_out.present is true for a single-node submission; E.4 makes it"
-                    " false there, and the switch power is counted against this node"
-                )
+                out.warnings.append(fragment("power-descriptor", "scale-out-present-true-2"))
             return
         if nodes == 1:
             return
@@ -631,15 +638,11 @@ class SystemPower(_Open):
         )
         if no_scale_up:
             out.problems.append(
-                f"scale_out.present is false, but the system has {nodes} nodes and no"
-                " scale-up network joins them; E.4 allows false only for a single node"
-                " or nodes joined by a fabric already counted in scale_up_network"
+                fragment("power-descriptor", "scale-out-present-false", nodes=nodes)
             )
         else:
             out.warnings.append(
-                f"scale_out.present is false for {nodes} nodes; E.4 allows that only where"
-                " the nodes are joined by a fabric already counted in scale_up_network,"
-                " which the descriptor cannot show"
+                fragment("power-descriptor", "scale-out-present-false-2", nodes=nodes)
             )
 
     def _add_scale_out(self, out: PowerComputation, tally: _Tally) -> float:
@@ -660,7 +663,9 @@ class SystemPower(_Open):
             if getattr(fabric, name) is None
         ]
         if missing:
-            out.problems.append(f"scale_out.present is true but {', '.join(missing)} is missing")
+            out.problems.append(
+                fragment("power-descriptor", "scale-out-present-true", missing=", ".join(missing))
+            )
             return nic_per_node_w
         assert fabric.nics is not None and fabric.switches is not None
         assert fabric.required_bandwidth_tbps is not None
@@ -670,20 +675,12 @@ class SystemPower(_Open):
         by_formula = any(s.power_method == "component_sum" for s in self.node_sets)
         if nics.counted:
             if not by_formula and not nics.excluded_from_published_power:
-                out.problems.append(
-                    "scale_out.nics.counted is true, but node power comes from a published"
-                    " specification, which §4.5.2 assumes includes the adapters. Set"
-                    " counted to false, or evidence the exclusion in"
-                    " excluded_from_published_power"
-                )
+                out.problems.append(fragment("power-descriptor", "scale-out-nics-counted"))
             per_nic = tally.watts("scale_out.nics.tdp_per_nic", nics.tdp_per_nic, nic_default())
             if per_nic is not None:
                 nic_per_node_w = nics.count_per_node * per_nic
         elif by_formula:
-            out.problems.append(
-                "scale_out.nics.counted is false, but node power is built with the MLC"
-                " formula, which has no NIC term — §4.5.2 says the NICs MUST be included"
-            )
+            out.problems.append(fragment("power-descriptor", "scale-out-nics-counted-2"))
 
         # E.4 defines the requirement as the NICs' sum, so a smaller declared figure —
         # which would let fewer switches through, and so less switch power — is held
@@ -692,16 +689,27 @@ class SystemPower(_Open):
         required = max(fabric.required_bandwidth_tbps, from_nics)
         if fabric.required_bandwidth_tbps < from_nics - 1e-6:
             out.problems.append(
-                f"scale_out.required_bandwidth_tbps is {fabric.required_bandwidth_tbps:g},"
-                f" below the {from_nics:g} Tb/s of NIC bandwidth E.4 defines it as"
-                f" ({nodes} nodes × {nics.count_per_node} NICs ×"
-                f" {nics.bandwidth_per_nic_gbps:g} Gb/s)"
+                fragment(
+                    "power-descriptor",
+                    "scale-out-required-bandwidth",
+                    required_bandwidth_tbps=fabric.required_bandwidth_tbps,
+                    from_nics=from_nics,
+                    nodes=nodes,
+                    count_per_node=nics.count_per_node,
+                    bandwidth_per_nic_gbps=nics.bandwidth_per_nic_gbps,
+                )
             )
         elif fabric.required_bandwidth_tbps > from_nics + 1e-6:
             out.warnings.append(
-                f"scale_out.required_bandwidth_tbps is {fabric.required_bandwidth_tbps:g},"
-                f" above the {from_nics:g} Tb/s the NICs carry ({nodes} nodes ×"
-                f" {nics.count_per_node} NICs × {nics.bandwidth_per_nic_gbps:g} Gb/s)"
+                fragment(
+                    "power-descriptor",
+                    "scale-out-required-bandwidth-2",
+                    required_bandwidth_tbps=fabric.required_bandwidth_tbps,
+                    from_nics=from_nics,
+                    nodes=nodes,
+                    count_per_node=nics.count_per_node,
+                    bandwidth_per_nic_gbps=nics.bandwidth_per_nic_gbps,
+                )
             )
 
         offered = 0.0
@@ -715,7 +723,12 @@ class SystemPower(_Open):
             offered += switch.count * switch.bandwidth_tbps
         if offered < required - 1e-6:
             out.problems.append(
-                f"scale-out switches offer {offered:g} Tb/s, below the required {required:g} Tb/s"
+                fragment(
+                    "power-descriptor",
+                    "scale-out-switches-offer",
+                    offered=offered,
+                    required=required,
+                )
             )
         return nic_per_node_w
 
@@ -734,17 +747,37 @@ class SystemPower(_Open):
             for name, value in ours.items():
                 theirs = getattr(stated, name)
                 if theirs is not None and abs(theirs - value) > _COMPUTED_TOL_W:
-                    problems.append(f"computed.{name} is {theirs:g}, recomputed {value:g}")
+                    problems.append(
+                        fragment(
+                            "power-descriptor",
+                            "computed-recomputed",
+                            name=name,
+                            theirs=theirs,
+                            value=value,
+                        )
+                    )
             if (
                 stated.overhead_fraction is not None
                 and abs(stated.overhead_fraction - out.overhead_fraction) > 1e-9
             ):
                 problems.append(
-                    f"computed.overhead_fraction is {stated.overhead_fraction:g}, but"
-                    f" cooling {self.cooling!r} fixes it at {out.overhead_fraction:g}"
+                    fragment(
+                        "power-descriptor",
+                        "computed-overhead-fraction-cooling",
+                        overhead_fraction=stated.overhead_fraction,
+                        cooling=self.cooling,
+                        overhead_fraction_2=out.overhead_fraction,
+                    )
                 )
         kw = out.provisioned_power_kw
         stated_kw = self.provisioned_power_kw
         if stated_kw is not None and kw is not None and abs(stated_kw - kw) > _KW_TOL:
-            problems.append(f"provisioned_power_kw is {stated_kw:g}, recomputed {kw:.2f}")
+            problems.append(
+                fragment(
+                    "power-descriptor",
+                    "provisioned-power-kw-recomputed",
+                    stated_kw=stated_kw,
+                    kw=kw,
+                )
+            )
         return problems

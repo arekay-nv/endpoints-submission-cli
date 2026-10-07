@@ -20,41 +20,51 @@ import yaml
 from pydantic import ValidationError
 
 from .file import AccuracyResult, PointConfig, PointSummary, SystemDescription, SystemPower
-from .results import CheckResult, Severity
+from .results import CheckResult, err
+
+#: A load failure: the ``_shared`` catalog message and the values it needs.
+_LoadError = tuple[str, dict[str, object]]
 
 
-def _load_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+def _load_json(path: Path) -> tuple[dict[str, Any] | None, _LoadError | None]:
     try:
         return json.loads(path.read_text()), None
     except FileNotFoundError:
-        return None, f"File not found: {path}"
+        return None, ("file-not-found", {"file_path": str(path)})
     except json.JSONDecodeError as exc:
-        return None, f"JSON parse error in {path.name}: {exc}"
+        return None, ("parse-error", {"file": path.name, "format": "JSON", "error": str(exc)})
     except OSError as exc:
-        return None, f"IO error reading {path.name}: {exc}"
+        return None, ("io-error", {"file": path.name, "error": str(exc)})
 
 
-def _load_yaml(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+def _load_yaml(path: Path) -> tuple[dict[str, Any] | None, _LoadError | None]:
     try:
         data = yaml.safe_load(path.read_text())
         if not isinstance(data, dict):
-            return None, f"Expected a YAML mapping in {path.name}"
+            return None, ("not-a-mapping", {"file": path.name, "format": "YAML"})
         return data, None
     except FileNotFoundError:
-        return None, f"File not found: {path}"
+        return None, ("file-not-found", {"file_path": str(path)})
     except yaml.YAMLError as exc:
-        return None, f"YAML parse error in {path.name}: {exc}"
+        return None, ("parse-error", {"file": path.name, "format": "YAML", "error": str(exc)})
     except OSError as exc:
-        return None, f"IO error reading {path.name}: {exc}"
+        return None, ("io-error", {"file": path.name, "error": str(exc)})
+
+
+def _load_failure(rule: str, path: Path, failure: _LoadError) -> list[CheckResult]:
+    key, params = failure
+    return [err(rule, key, path, **params)]
 
 
 def _validation_errors(exc: ValidationError, rule: str, path: Path) -> list[CheckResult]:
     return [
-        CheckResult(
-            rule=rule,
-            message=f"Validation error in {path.name}: {e['loc']} — {e['msg']}",
-            severity=Severity.ERROR,
-            path=path,
+        err(
+            rule,
+            "field-invalid",
+            path,
+            file=path.name,
+            field=".".join(str(part) for part in e["loc"]) or "(top level)",
+            problem=e["msg"],
         )
         for e in exc.errors()
     ]
@@ -72,14 +82,7 @@ def load_system_description(
     """
     data, load_err = _load_json(path)
     if load_err:
-        return None, [
-            CheckResult(
-                rule="system-description-valid",
-                message=load_err,
-                severity=Severity.ERROR,
-                path=path,
-            )
-        ]
+        return None, _load_failure("system-description-valid", path, load_err)
     try:
         return SystemDescription.model_validate(data), []
     except ValidationError as exc:
@@ -99,11 +102,7 @@ def load_point_config(
     """
     data, load_err = _load_yaml(path)
     if load_err:
-        return None, [
-            CheckResult(
-                rule="point-config-valid", message=load_err, severity=Severity.ERROR, path=path
-            )
-        ]
+        return None, _load_failure("point-config-valid", path, load_err)
     try:
         instance = PointConfig.model_validate(data, context=context or {})
         return instance, list(instance._check_results)
@@ -121,11 +120,7 @@ def load_result_summary(path: Path) -> tuple[PointSummary | None, list[CheckResu
     """
     data, load_err = _load_json(path)
     if load_err:
-        return None, [
-            CheckResult(
-                rule="result-file-valid", message=load_err, severity=Severity.ERROR, path=path
-            )
-        ]
+        return None, _load_failure("result-file-valid", path, load_err)
     try:
         return PointSummary.model_validate(data), []
     except ValidationError as exc:
@@ -145,9 +140,7 @@ def load_accuracy_result(
     """
     data, load_err = _load_json(path)
     if load_err:
-        return None, [
-            CheckResult(rule="accuracy-valid", message=load_err, severity=Severity.ERROR, path=path)
-        ]
+        return None, _load_failure("accuracy-valid", path, load_err)
     try:
         instance = AccuracyResult.model_validate(data, context={"json_path": path})
         return instance, list(instance._check_results)
@@ -194,11 +187,7 @@ def load_system_power(path: Path) -> tuple[SystemPower | None, list[CheckResult]
     """
     data, load_err = _load_json(path)
     if load_err:
-        return None, [
-            CheckResult(
-                rule="power-descriptor", message=load_err, severity=Severity.ERROR, path=path
-            )
-        ]
+        return None, _load_failure("power-descriptor", path, load_err)
     try:
         return SystemPower.model_validate(data), []
     except ValidationError as exc:

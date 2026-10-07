@@ -19,8 +19,6 @@ from ..results import CheckResult, err, ok, warn
 
 __all__ = ["DrafterBinding"]
 
-_SPEC_REF = "#2.9.4"
-
 
 class DrafterBinding(BaseModel):
     """Validates a curve's speculative-decoding disclosures against the approved list."""
@@ -52,33 +50,25 @@ class DrafterBinding(BaseModel):
                 self._check_results.append(
                     err(
                         "approved-drafter",
-                        f"Point {config.concurrency} uses speculative decoding, but no drafter"
-                        f" is approved for {self.benchmark!r}. §2.9.4 disallows speculative"
-                        " decoding entirely for a benchmark with no approved drafter"
-                        " (--approved-drafters points at a newer published list)",
+                        "fail",
                         yaml_path,
-                        _SPEC_REF,
+                        concurrency=config.concurrency,
+                        benchmark=self.benchmark,
                     )
                 )
                 continue
             if any(entry.matches(declared) for entry in self.approved):
                 self._check_results.append(
-                    ok(
-                        "approved-drafter",
-                        f"Point {config.concurrency}: drafter matches an approved entry",
-                        yaml_path,
-                        _SPEC_REF,
-                    )
+                    ok("approved-drafter", "pass", yaml_path, concurrency=config.concurrency)
                 )
             else:
                 self._check_results.append(
                     err(
                         "approved-drafter",
-                        f"Point {config.concurrency}: declared drafter matches no approved entry"
-                        f" for {self.benchmark!r}. §2.9.4 identifies an entry by weight"
-                        " checksum, or by target checksum plus configuration",
+                        "fail-2",
                         yaml_path,
-                        _SPEC_REF,
+                        concurrency=config.concurrency,
+                        benchmark=self.benchmark,
                     )
                 )
         return self
@@ -97,11 +87,11 @@ class DrafterBinding(BaseModel):
                 self._check_results.append(
                     warn(
                         "drafter-approval-lead-time",
-                        f"Point {config.concurrency}: lead time unevaluable —"
-                        f" target_cohort={config.target_cohort!r},"
-                        f" approved_cohort={matched.approved_cohort!r}",
+                        "warn",
                         yaml_path,
-                        _SPEC_REF,
+                        concurrency=config.concurrency,
+                        target_cohort=config.target_cohort,
+                        approved_cohort=matched.approved_cohort,
                     )
                 )
                 continue
@@ -109,22 +99,24 @@ class DrafterBinding(BaseModel):
                 self._check_results.append(
                     err(
                         "drafter-approval-lead-time",
-                        f"Point {config.concurrency}: drafter approved in"
-                        f" {matched.approved_cohort}, so the earliest usable target_cohort is"
-                        f" {earliest} ({DRAFTER_APPROVAL_LEAD_COHORTS} cohorts later);"
-                        f" this submission targets {target}",
+                        "fail",
                         yaml_path,
-                        _SPEC_REF,
+                        concurrency=config.concurrency,
+                        approved_cohort=matched.approved_cohort,
+                        earliest=earliest,
+                        drafter_approval_lead_cohorts=DRAFTER_APPROVAL_LEAD_COHORTS,
+                        target=target,
                     )
                 )
             else:
                 self._check_results.append(
                     ok(
                         "drafter-approval-lead-time",
-                        f"Point {config.concurrency}: target_cohort {target} ≥ earliest"
-                        f" usable {earliest}",
+                        "pass",
                         yaml_path,
-                        _SPEC_REF,
+                        concurrency=config.concurrency,
+                        target=target,
+                        earliest=earliest,
                     )
                 )
         return self
