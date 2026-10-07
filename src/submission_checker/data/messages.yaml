@@ -24,11 +24,46 @@ _shared:
     io-error:
       text: 'IO error reading {file}: {error}'
     field-invalid:
-      text: 'Validation error in {file}: {field} — {problem}'
+      text: '{file}, field `{field}`: {problem}'
+    file-invalid:
+      text: '{file}: {problem}'
+    unworded-error:
+      text: '{message}'
     score-not-fraction:
       text: 'r{concurrency}: `{dataset}` score {value} is not a fraction in [0, 1], which is what the
         reference scorer reports'
       spec: §4.3
+_pydantic:
+  # Pydantic's built-in validation errors, keyed by its error type. Templates may use
+  # the error's context values (see pydantic_core's list_all_errors) and {input}, the
+  # offending value. The test suite fails when this list and the types the file
+  # models can raise drift apart.
+  title: Field validation
+  spec: ''
+  messages:
+    missing: required, but missing
+    extra_forbidden:
+      text: not a recognised field
+      fix: Remove it, or check its spelling against the spec's template.
+    model_type: expected an object, got {input}
+    model_attributes_type: expected an object, got {input}
+    dict_type: expected an object, got {input}
+    list_type: expected a list, got {input}
+    too_short: needs at least {min_length} item(s), got {actual_length}
+    string_type: expected a string, got {input}
+    string_too_short: needs at least {min_length} character(s), got {input}
+    int_type: expected a whole number, got {input}
+    int_parsing: expected a whole number, got {input}
+    int_from_float: expected a whole number, got {input}
+    float_type: expected a number, got {input}
+    float_parsing: expected a number, got {input}
+    bool_type: expected true or false, got {input}
+    bool_parsing: expected true or false, got {input}
+    greater_than: must be greater than {gt}, got {input}
+    greater_than_equal: must be at least {ge}, got {input}
+    less_than_equal: must be at most {le}, got {input}
+    literal_error: must be {expected}, got {input}
+    enum: must be {expected}, got {input}
 accuracy-coverage:
   title: Accuracy at the mandatory points
   spec: §5.3
@@ -75,6 +110,14 @@ accuracy-valid:
   spec: §4.3
   messages:
     fail: accuracy_result.json is empty
+    scores-not-collection: accuracy_scores must be a mapping of datasets or a list of entries
+    entry-not-mapping: each accuracy_scores entry must be an object
+    entry-unnamed: each accuracy_scores entry needs a non-empty dataset_name
+    dataset-duplicate: dataset {name!r} appears more than once
+    score-missing: dataset {name!r} has no score
+    alias-conflict:
+      text: dataset {name!r} gives {native} and {canonical} different values
+      fix: They are two spellings of one field; give one, or make them agree.
 agentic-accuracy:
   title: Agentic accuracy
   spec: §3.2
@@ -383,6 +426,14 @@ point-cap:
   spec: §2, §8
   messages:
     fail: '{n} points exceed the {max_points}-point cap'
+point-config-valid:
+  title: Point configuration (point.yaml)
+  spec: §8.3
+  messages:
+    warmup-completed-exceeds-issued: warmup requests_completed ({completed}) exceeds requests_issued
+      ({issued})
+    warmup-concurrency-zero: warmup concurrency must be positive when duration or requests are
+      nonzero
 point-count:
   title: Number of points
   spec: §2, §8
@@ -429,6 +480,10 @@ power-descriptor:
   title: Power descriptor (system_power.json)
   spec: §4.5.2
   messages:
+    value-count: give exactly one of value_w, value_kw or value_pj
+    mlc-default-source: an mlc_default source names its Appendix D subsection ({subsections}), not
+      {source!r}
+    source-not-url: a {source_type} source must be a resolvable URL, not {source!r}
     pass:
       text: No system_power.json; power normalisation is not required for the {division} division
       spec: §4.5
@@ -502,7 +557,8 @@ region-computation:
   title: Region boundaries
   spec: §5.5
   messages:
-    fail: '{detail}'
+    c-min-range: Minimum concurrency must be between 1 and {limit} (inclusive), got {c_min}
+    c-max-too-low: Maximum Supported Concurrency must be greater than {limit}, got {c_max}
 region-declared:
   title: Region declared
   spec: §8.3
@@ -523,6 +579,12 @@ required-dir:
     fail:
       text: 'Missing required directory: {name}/{hint}'
       fix: Create {name}/ at the submission root, laid out as §8.1 describes.
+result-file-valid:
+  title: Result summary (result_summary.json)
+  spec: §8.3
+  messages:
+    percentile-key: '{key!r} is not a percentile between 0 and 100'
+    percentile-conflict: two keys for percentile {percentile} give different values
 result-summary-present:
   title: Result summary present
   spec: §1
@@ -675,6 +737,13 @@ system-description-valid:
   messages:
     pass: System description valid for {rel}
     fail: system_desc.json is not readable as a JSON object
+    core-count-missing: a node type must give host_processor_core_count or host_processor_vcpu_count
+    division-unknown: unknown division {value!r}; must be one of standardized, serviced, rdi
+    availability-unknown: unknown availability {value!r}; must be one of available, preview, rdi
+    availability-conflict:
+      text: the availability fields disagree ({values})
+      fix: publication_status, system_availability_status and availability_status are spellings of
+        one field; give one, or make them agree.
 system-results-dir:
   title: System results directory
   spec: §1

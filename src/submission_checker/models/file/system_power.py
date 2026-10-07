@@ -38,7 +38,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ...messages import fragment
+from ...messages import Invalid, fragment
 from ...power_defaults import (
     PowerDefault,
     accelerator_default,
@@ -116,16 +116,21 @@ class SourcedValue(BaseModel):
     def _one_value_and_a_real_source(self) -> SourcedValue:
         values = [v for v in (self.value_w, self.value_kw, self.value_pj) if v is not None]
         if len(values) != 1:
-            raise ValueError("exactly one of value_w, value_kw or value_pj is required")
+            raise Invalid("power-descriptor", "value-count")
         if self.source_type == "mlc_default":
             if self.source not in _APPENDIX_D:
-                raise ValueError(
-                    f"an mlc_default source names its Appendix D subsection"
-                    f" ({', '.join(sorted(_APPENDIX_D))}), not {self.source!r}"
+                raise Invalid(
+                    "power-descriptor",
+                    "mlc-default-source",
+                    subsections=", ".join(sorted(_APPENDIX_D)),
+                    source=self.source,
                 )
         elif not self.source.startswith(("https://", "http://")):
-            raise ValueError(
-                f"a {self.source_type} source must be a resolvable URL, not {self.source!r}"
+            raise Invalid(
+                "power-descriptor",
+                "source-not-url",
+                source_type=self.source_type,
+                source=self.source,
             )
         return self
 

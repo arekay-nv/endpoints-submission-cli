@@ -16,6 +16,7 @@ __all__ = ["SubmissionChecker"]
 
 from . import layout
 from .drafters import ApprovedDrafter, DrafterListError, load_approved_drafters
+from .messages import Invalid
 from .models import (
     AccuracyResult,
     CheckResult,
@@ -971,10 +972,8 @@ class SubmissionChecker:
 
         try:
             regions = compute_regions(c_max, c_min)
-        except ValueError as exc:
-            results.append(
-                _err("region-computation", "fail", sd_path or model_dir, detail=str(exc))
-            )
+        except Invalid as exc:
+            results.append(_err(exc.rule, exc.key, sd_path or model_dir, **exc.params))
             return None, results
         return regions, results
 

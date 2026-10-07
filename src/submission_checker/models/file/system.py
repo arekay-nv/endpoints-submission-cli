@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from ...messages import Invalid
+
 __all__ = [
     "AcceleratorInfo",
     "ConfigSummary",
@@ -130,10 +132,7 @@ class NodeType(BaseModel):
     def _require_core_or_vcpu_count(self) -> NodeType:
         """A node must disclose at least one of physical core count or vCPU count."""
         if self.host_processor_core_count is None and self.host_processor_vcpu_count is None:
-            raise ValueError(
-                "node_types entry must specify host_processor_core_count or"
-                " host_processor_vcpu_count"
-            )
+            raise Invalid("system-description-valid", "core-count-missing")
         return self
 
 
@@ -268,7 +267,7 @@ class SystemDescription(BaseModel):
             normalized = mapping.get(v.strip().lower())
             if normalized is not None:
                 return normalized
-            raise ValueError(f"Unknown division {v!r}. Must be one of: standardized, serviced, rdi")
+            raise Invalid("system-description-valid", "division-unknown", value=v)
         return v
 
     @model_validator(mode="before")
@@ -291,7 +290,7 @@ class SystemDescription(BaseModel):
         distinct = {str(v).strip().lower() for v in present.values()}
         if len(distinct) > 1:
             pairs = ", ".join(f"{k}={v!r}" for k, v in sorted(present.items()))
-            raise ValueError(f"Conflicting availability values: {pairs}")
+            raise Invalid("system-description-valid", "availability-conflict", values=pairs)
         if data.get("publication_status") in (None, ""):
             data = {**data, "publication_status": next(iter(present.values()))}
         return data
@@ -304,7 +303,7 @@ class SystemDescription(BaseModel):
             normalized = mapping.get(v.strip().lower())
             if normalized is not None:
                 return normalized
-            raise ValueError(f"Unknown availability {v!r}. Must be one of: available, preview, rdi")
+            raise Invalid("system-description-valid", "availability-unknown", value=v)
         return v
 
     @field_validator("input_token_average", "output_token_average", mode="before")
