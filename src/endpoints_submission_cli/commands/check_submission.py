@@ -5,6 +5,11 @@
 Designed to be dropped into a GitHub Actions (or any CI) pipeline: it prints a
 human-readable table, optionally emits GitHub workflow annotations and a job
 summary, and exits non-zero when the submission fails §9.1 compliance.
+
+Results are listed errors first, then warnings, then info. Inside GitHub
+Actions the errors print in full while warnings and info are folded into
+log groups (collapsed by default), and the job summary does the same with a
+<details> block, so a failing check opens on what failed.
 """
 
 from __future__ import annotations
@@ -17,19 +22,34 @@ from rich.console import Console
 from rich.table import Table
 
 from submission_checker.checker import SubmissionChecker
-from submission_checker.models import Report, Severity
+from submission_checker.models import CheckResult, Report, Severity
 
 __all__ = ["check_submission"]
 
-# stdout: the report is this command's primary output, so it goes to stdout
-# (Rich auto-disables colour when stdout is not a TTY, e.g. in CI logs).
-_console = Console()
-
+# Row styles: errors and warnings must be told apart at a glance.
 _SEVERITY_STYLE: dict[Severity, str] = {
     Severity.ERROR: "bold red",
     Severity.WARNING: "yellow",
     Severity.INFO: "dim",
 }
+
+# Display order: what failed comes first.
+_SEVERITY_ORDER: dict[Severity, int] = {
+    Severity.ERROR: 0,
+    Severity.WARNING: 1,
+    Severity.INFO: 2,
+}
+
+# Job-summary markers. Markdown cannot colour text, so the colour rides on these.
+_SUMMARY_MARKER: dict[Severity, str] = {
+    Severity.ERROR: "🔴",
+    Severity.WARNING: "🟡",
+    Severity.INFO: "",
+}
+
+# GitHub Actions logs render ANSI colour but are not a TTY, and report an
+# 80-column terminal that truncates every message cell.
+_GITHUB_LOG_WIDTH = 200
 
 # Map our severities onto GitHub Actions annotation levels.
 _GITHUB_LEVEL: dict[Severity, str] = {
@@ -75,8 +95,26 @@ def _emit_github_annotations(report: Report) -> None:
         click.echo(f"::{_GITHUB_LEVEL[result.severity]} {','.join(props)}::{message}", err=True)
 
 
+def _by_severity(results: list[CheckResult]) -> list[CheckResult]:
+    """Errors, then warnings, then info; stable, so checker order holds within each."""
+    return sorted(results, key=lambda r: _SEVERITY_ORDER[r.severity])
+
+
+def _summary_table(results: list[CheckResult]) -> list[str]:
+    lines = ["| Severity | Rule | § Ref | Message | Path |", "| --- | --- | --- | --- | --- |"]
+    for r in results:
+        loc = _rel_to_cwd(r.path) if r.path else ""
+        msg = r.message.replace("|", "\\|").replace("\n", " ")
+        severity = f"{_SUMMARY_MARKER[r.severity]} {r.severity.value}"
+        lines.append(f"| {severity} | {r.rule} | {r.spec_ref} | {msg} | {loc} |")
+    return lines
+
+
 def _write_step_summary(report: Report, path: Path, summary_file: Path) -> None:
-    """Append a Markdown summary to ``$GITHUB_STEP_SUMMARY`` for the job page."""
+    """Append a Markdown summary to ``$GITHUB_STEP_SUMMARY`` for the job page.
+
+    Errors are shown in full; warnings sit in a collapsed <details> block.
+    """
     errors, warnings = report.errors, report.warnings
     status = "✅ **PASSED**" if not errors else "❌ **FAILED**"
     lines = [
@@ -84,51 +122,84 @@ def _write_step_summary(report: Report, path: Path, summary_file: Path) -> None:
         "",
         f"{status} — `{path}`",
         "",
-        f"- Errors: **{len(errors)}**",
-        f"- Warnings: **{len(warnings)}**",
+        f"- 🔴 Errors: **{len(errors)}**",
+        f"- 🟡 Warnings: **{len(warnings)}**",
         f"- Total checks: {len(report.results)}",
     ]
-    findings = [r for r in report.results if r.severity != Severity.INFO]
-    if findings:
+    if errors:
+        lines += ["", "### 🔴 Errors", "", *_summary_table(errors)]
+    if warnings:
+        # The blank lines around the table are required for GitHub to render
+        # Markdown inside <details>.
         lines += [
             "",
-            "| Severity | Rule | § Ref | Message | Path |",
-            "| --- | --- | --- | --- | --- |",
+            "<details>",
+            f"<summary>🟡 {len(warnings)} warning(s) — click to expand</summary>",
+            "",
+            *_summary_table(warnings),
+            "",
+            "</details>",
         ]
-        for r in findings:
-            loc = _rel_to_cwd(r.path) if r.path else ""
-            msg = r.message.replace("|", "\\|").replace("\n", " ")
-            lines.append(f"| {r.severity.value} | {r.rule} | {r.spec_ref} | {msg} | {loc} |")
     lines.append("")
     with open(summary_file, "a", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
 
 
-def _render_table(report: Report, path: Path, quiet: bool) -> Table:
-    table = Table(title=f"Submission Check — {path}", show_lines=True)
+def _render_table(results: list[CheckResult], path: Path, title: str) -> Table:
+    table = Table(title=title, show_lines=True)
     table.add_column("Rule", style="cyan", no_wrap=True)
     table.add_column("§ Ref", style="dim", no_wrap=True)
     table.add_column("Severity", no_wrap=True)
     table.add_column("Message")
     table.add_column("Path", style="dim")
 
-    for result in report.results:
-        if quiet and result.severity == Severity.INFO:
-            continue
+    for result in _by_severity(results):
         style = _SEVERITY_STYLE[result.severity]
         loc = (
             str(result.path.relative_to(path))
             if result.path and result.path.is_relative_to(path)
             else str(result.path or "")
         )
+        # Errors and warnings colour the whole row; info only dims its severity.
+        row_style = style if result.severity != Severity.INFO else None
         table.add_row(
             result.rule,
             result.spec_ref,
             f"[{style}]{result.severity.value}[/{style}]",
             result.message,
             loc,
+            style=row_style,
         )
     return table
+
+
+def _print_report(console: Console, report: Report, path: Path, quiet: bool) -> None:
+    """One table, errors first: the view for a terminal."""
+    results = [r for r in report.results if not (quiet and r.severity == Severity.INFO)]
+    console.print(_render_table(results, path, f"Submission Check — {path}"))
+
+
+def _print_grouped_report(console: Console, report: Report, path: Path, quiet: bool) -> None:
+    """The GitHub Actions log view: errors in full, the rest in collapsed groups.
+
+    Log groups cannot nest, so the calling workflow must not wrap this command
+    in a ``::group::`` of its own, or these would close it early.
+    """
+    title = f"Submission Check — {path}"
+    if report.errors:
+        console.print(_render_table(report.errors, path, f"{title}: errors"))
+    infos = [r for r in report.results if r.severity == Severity.INFO]
+    folded = [(report.warnings, "warning(s)")]
+    if not quiet:
+        folded.append((infos, "info result(s)"))
+    for results, label in folded:
+        if not results:
+            continue
+        console.file.flush()
+        click.echo(f"::group::{title}: {len(results)} {label}")
+        console.print(_render_table(results, path, f"{title}: {label}"))
+        console.file.flush()
+        click.echo("::endgroup::")
 
 
 @click.command(name="check-submission")
@@ -180,6 +251,9 @@ def check_submission(
 
     in_github = os.environ.get("GITHUB_ACTIONS") == "true"
     do_annotate = in_github if annotate is None else annotate
+    # stdout: the report is this command's primary output. Rich disables colour
+    # when stdout is not a TTY; GitHub Actions logs are not one but do render it.
+    console = Console(force_terminal=True, width=_GITHUB_LOG_WIDTH) if in_github else Console()
 
     if output is not None:
         output.write_text(report.model_dump_json(indent=2))
@@ -192,8 +266,10 @@ def check_submission(
 
     if as_json:
         click.echo(report.model_dump_json(indent=2))
+    elif in_github:
+        _print_grouped_report(console, report, path, quiet)
     else:
-        _console.print(_render_table(report, path, quiet))
+        _print_report(console, report, path, quiet)
 
     error_count = len(report.errors)
     warn_count = len(report.warnings)
@@ -201,6 +277,6 @@ def check_submission(
 
     if not as_json:
         verdict = "[bold red]FAILED[/]" if failed else "[bold green]PASSED[/]"
-        _console.print(f"{verdict} — {error_count} error(s), {warn_count} warning(s)")
+        console.print(f"{verdict} — {error_count} error(s), {warn_count} warning(s)")
 
     raise SystemExit(1 if failed else 0)

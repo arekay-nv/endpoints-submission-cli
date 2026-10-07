@@ -117,3 +117,69 @@ class TestCheckSubmission:
             assert strict.exit_code == 1
         else:
             assert strict.exit_code == 0
+
+
+_GITHUB = {"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": ""}
+
+
+def _first_index(text: str, needle: str) -> int:
+    index = text.find(needle)
+    assert index >= 0, f"{needle!r} not in output"
+    return index
+
+
+@pytest.mark.unit
+class TestCheckSubmissionOrdering:
+    """Errors come first and stand out; warnings and info are folded away in CI."""
+
+    def test_errors_listed_before_warnings_and_info(self) -> None:
+        # sub_g's checker order interleaves severities; the table must not.
+        result = _runner.invoke(app, ["check-submission", str(_FAILING)], env=_NO_CI)
+        severities = [
+            word
+            for line in result.output.splitlines()
+            for word in ("error", "warning", "info")
+            if f"│ {word} " in line
+        ]
+        assert severities == sorted(severities, key=["error", "warning", "info"].index)
+        assert severities[0] == "error"
+
+    def test_github_log_is_coloured_and_wide(self) -> None:
+        result = _runner.invoke(app, ["check-submission", str(_FAILING)], env=_GITHUB)
+        assert "\x1b[" in result.stdout  # ANSI colour despite stdout not being a TTY
+        # Messages are not cut to an 80-column terminal.
+        assert "low-concurrency-coverage" in result.stdout
+
+    def test_github_log_folds_warnings_and_info_but_not_errors(self) -> None:
+        result = _runner.invoke(app, ["check-submission", str(_FAILING)], env=_GITHUB)
+        out = result.stdout
+        errors_table = _first_index(out, ": errors")
+        warnings_group = _first_index(out, "::group::")
+        assert errors_table < warnings_group  # errors print outside any group
+        assert "warning(s)" in out[warnings_group : out.index("\n", warnings_group)]
+        assert out.count("::group::") == out.count("::endgroup::") == 2  # warnings, info
+
+    def test_github_quiet_drops_the_info_group(self) -> None:
+        result = _runner.invoke(app, ["check-submission", "--quiet", str(_FAILING)], env=_GITHUB)
+        assert result.stdout.count("::group::") == 1
+        assert "info result(s)" not in result.stdout
+
+    def test_passing_submission_has_no_error_table(self) -> None:
+        result = _runner.invoke(app, ["check-submission", str(_VALID)], env=_GITHUB)
+        assert result.exit_code == 0
+        assert ": errors" not in result.stdout
+
+    def test_step_summary_shows_errors_and_collapses_warnings(self, tmp_path: Path) -> None:
+        summary = tmp_path / "summary.md"
+        _runner.invoke(
+            app,
+            ["check-submission", str(_FAILING)],
+            env={"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": str(summary)},
+        )
+        text = summary.read_text()
+        errors = _first_index(text, "### 🔴 Errors")
+        details = _first_index(text, "<details>")
+        assert errors < details
+        assert "| 🔴 error |" in text[errors:details]
+        assert "🟡 warning" not in text[errors:details]
+        assert "| 🟡 warning |" in text[details : _first_index(text, "</details>")]
