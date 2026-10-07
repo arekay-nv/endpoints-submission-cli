@@ -32,10 +32,10 @@
 #   `git-sha1:<revision>`. A revision is the git commit of the model repository; its
 #   tree pins every weight file's SHA-256 through the LFS pointers, so it identifies
 #   the published weights exactly.
-# - approved_cohort is 2026-09-C0 for every entry: the cohort in which the README first
-#   published the approved list (endpoints#494, 2026-09-10, after the 2026-09-02 C0
-#   publication). The DeepSeek-V4.1-Flash entry was added to that list later
-#   (endpoints#519, 2026-09-30) and is recorded against the same cohort.
+# - approved_cohort follows each entry's publication: Kimi and Qwen were published
+#   in endpoints#494 on 2026-09-10, in 2026-09-C0. DeepSeek-V4.1-Flash was added in
+#   endpoints#519 on 2026-09-30, in 2026-09-C1 (after the 2026-09-16 C1 publication).
+#   The later addition must satisfy its own two-cohort approval lead time.
 
 drafters:
   # Kimi K3: separately published DSpark heads (endpoints#494).
@@ -50,7 +50,7 @@ drafters:
 
   # DeepSeek-V4.1-Flash: the native DSpark head in the approved checkpoint (endpoints#519).
   - benchmark: deepseek-v4_1-flash
-    approved_cohort: 2026-09-C0
+    approved_cohort: 2026-09-C1
     model_id: deepseek-ai/DeepSeek-V4.1-Flash
     weight_checksum: git-sha1:dba1be0a40aa45a94ad051997016db3960a90277
 

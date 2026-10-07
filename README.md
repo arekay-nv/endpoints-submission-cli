@@ -482,7 +482,7 @@ set published after this release.
 | `metric-consistency-tpot-p90` | §9.1 | Reported TPOT P90 present, finite, strictly positive |
 | `metric-consistency-tps-per-user` | §9.1 | Stored `tps_per_user` matches `1000 / tpot_p90_ms` |
 | `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / point_power_kw` — see [per-point normalisation](#per-point-normalisation-453) |
-| `agentic-metric-consistency` | §4.1 | `e2e_avg_interactivity` is derivable from its reported inputs: the per-turn sums, or the client's `output_sequence_lengths.total / latency.total` when no sample failed |
+| `agentic-metric-consistency` | §4.1 | `e2e_avg_interactivity` is derivable from its reported inputs: the per-turn sums, or the client's `output_sequence_lengths.total / (latency.total / 1e9)` when no sample failed (latency is in nanoseconds) |
 
 ### Accuracy (§15)
 

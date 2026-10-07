@@ -147,8 +147,8 @@ class PointSummary(BaseModel):
         """§4.1: ``sum(output_tokens_per_turn) / sum(e2e_turn_time_seconds)``.
 
         The agentic analogue of ``tps_per_user`` — the output-token rate across
-        completed turns, one scalar per measurement point. ``None`` for a single-turn
-        benchmark, which reports neither input.
+        completed turns, one scalar per measurement point. Also derivable for
+        single-turn reports; ``None`` when usable input totals are unavailable.
 
         The reference client reports the same two sums under its own names:
         ``output_sequence_lengths.total`` (tokens) and ``latency.total`` (nanoseconds of

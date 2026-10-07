@@ -99,12 +99,36 @@ class TestDrafterList:
             for benchmark, heads in self._REFERENCE_HEADS.items()
         }
 
-    def test_bundled_heads_are_recorded_against_the_lists_first_cohort(self) -> None:
-        """Every entry counts from 2026-09-C0, when the README first published the list."""
+    def test_bundled_heads_record_their_own_publication_cohort(self) -> None:
+        """The September 30 DeepSeek addition cannot inherit the September 10 approval."""
         cohorts = {
             d.model_id: d.approved_cohort for ds in load_approved_drafters().values() for d in ds
         }
-        assert set(cohorts.values()) == {"2026-09-C0"}
+        assert cohorts == {
+            model_id: "2026-09-C1" if benchmark == "deepseek-v4_1-flash" else "2026-09-C0"
+            for benchmark, heads in self._REFERENCE_HEADS.items()
+            for model_id in heads
+        }
+
+    @pytest.mark.parametrize(
+        ("target_cohort", "expected_severity"),
+        [("2026-10-C0", Severity.ERROR), ("2026-10-C1", Severity.INFO)],
+    )
+    def test_deepseek_bundled_head_respects_its_approval_lead_time(
+        self, tmp_path: Path, target_cohort: str, expected_severity: Severity
+    ) -> None:
+        benchmark = "deepseek-v4_1-flash"
+        approved = load_approved_drafters()[benchmark]
+        binding = DrafterBinding(
+            points=[
+                _point(tmp_path, {"weight_checksum": approved[0].weight_checksum}, target_cohort)
+            ],
+            approved=approved,
+            benchmark=benchmark,
+            model_dir=tmp_path,
+        )
+        results = [r for r in binding._check_results if r.rule == "drafter-approval-lead-time"]
+        assert [r.severity for r in results] == [expected_severity]
 
     def test_bundled_heads_are_usable_in_the_2026_10_c1_cohort(self) -> None:
         target = Cohort.parse("2026-10-C1")
