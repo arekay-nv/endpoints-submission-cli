@@ -733,6 +733,81 @@ class TestRunArchiveLayouts:
         written = next(sub_dir.rglob("accuracy_results.json"))
         assert json.loads(written.read_text())["cnn_dailymail"]["score"]["rouge1"] == 42.0
 
+    # `--mode both` writes performance/ and accuracy/ into one run. Its datasets list the
+    # performance dataset first, so the run is filed as performance; its accuracy/ must
+    # still reach the point.
+
+    def _both_mode_archive(
+        self, run_folder: Path, tmp_path: Path, name: str, *, accuracy: dict | None
+    ) -> Path:
+        import shutil
+
+        folder = tmp_path / name
+        shutil.copytree(run_folder, folder)
+        config = yaml.safe_load((folder / "config.yaml").read_text())
+        config["datasets"] = [
+            {"name": "cnn_dailymail", "type": "performance"},
+            *([{"name": "cnn_dailymail_acc", "type": "accuracy"}] if accuracy else []),
+        ]
+        (folder / "config.yaml").write_text(yaml.dump(config))
+        if accuracy is not None:
+            (folder / "accuracy").mkdir(exist_ok=True)
+            (folder / "accuracy" / "accuracy_results.json").write_text(json.dumps(accuracy))
+        archive = tmp_path / f"{name}.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(folder, arcname=name)
+        return archive
+
+    def test_mode_both_run_keeps_its_accuracy(self, run_folder: Path, tmp_path: Path) -> None:
+        accuracy = {"cnn_dailymail_acc": {"num_samples": 10, "score": {"rouge1": 41.0}}}
+        archive = self._both_mode_archive(run_folder, tmp_path, "both", accuracy=accuracy)
+
+        sub_dir = build_submission_folder(
+            [("run-001", archive)], "standardized", "available", tmp_path / "sub"
+        )
+
+        written = next(sub_dir.rglob("accuracy_results.json"))
+        assert json.loads(written.read_text()) == accuracy
+
+    def test_performance_log_is_not_taken_for_accuracy(
+        self, run_folder: Path, tmp_path: Path
+    ) -> None:
+        """A performance-only run's top-level results.json is its request log."""
+        archive = self._both_mode_archive(run_folder, tmp_path, "perf", accuracy=None)
+
+        sub_dir = build_submission_folder(
+            [("run-001", archive)], "standardized", "available", tmp_path / "sub"
+        )
+
+        assert not list(sub_dir.rglob("accuracy_results.json"))
+
+    def test_a_separate_accuracy_run_still_wins(self, run_folder: Path, tmp_path: Path) -> None:
+        both = self._both_mode_archive(
+            run_folder, tmp_path, "both", accuracy={"from": {"num_samples": 1, "score": 1.0}}
+        )
+        acc_only = self._both_mode_archive(
+            run_folder, tmp_path, "acc", accuracy={"from": {"num_samples": 1, "score": 2.0}}
+        )
+        acc_dir = tmp_path / "acc-config"
+        with tarfile.open(acc_only) as tar:
+            tar.extractall(acc_dir, filter="data")
+        config_path = acc_dir / "acc" / "config.yaml"
+        config = yaml.safe_load(config_path.read_text())
+        config["datasets"] = [{"name": "cnn_dailymail_acc", "type": "accuracy"}]
+        config_path.write_text(yaml.dump(config))
+        with tarfile.open(acc_only, "w:gz") as tar:
+            tar.add(acc_dir / "acc", arcname="acc")
+
+        sub_dir = build_submission_folder(
+            [("run-001", both), ("run-002", acc_only)],
+            "standardized",
+            "available",
+            tmp_path / "sub",
+        )
+
+        written = next(sub_dir.rglob("accuracy_results.json"))
+        assert json.loads(written.read_text())["from"]["score"] == 2.0
+
 
 @pytest.mark.unit
 class TestDirectoryNamingPrecedence:

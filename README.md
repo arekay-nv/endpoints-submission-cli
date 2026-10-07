@@ -454,11 +454,24 @@ not satisfy High Concurrency coverage.
 | `drafter-approval-lead-time` | §2.9.4 | Approved at least two cohorts before `target_cohort` |
 | `drafter-list-registry` | §2.9.4 | Warns when the drafter list itself cannot be read |
 
-The approved list ships as data (`src/submission_checker/data/approved_drafters.yaml`)
-and is **empty** — §2.9.4's list has not been published yet, and an empty registry means
-speculative decoding is not permitted for any benchmark, which is §2.9.4's own rule for a
-benchmark with no approved drafter. Point `--approved-drafters FILE` or
-`$MLPERF_ENDPOINTS_APPROVED_DRAFTERS` at a published list.
+The approved list ships as data (`src/submission_checker/data/approved_drafters.yaml`),
+transcribed from the agentic reference README's "Approved Checkpoints and
+Speculative-Decoding Heads" (mlcommons/endpoints `examples/10_Agentic_Inference`): the
+Kimi K3 DSpark heads, and the native heads of the approved DeepSeek-V4.1-Flash and
+Qwen3.6-35B-A3B checkpoints. Each is weight-identified by its Hugging Face revision
+(`weight_checksum: git-sha1:<revision>`), which a point's `speculative_decoding` block must
+declare to match. A benchmark with no entry has no approved drafter, so speculative
+decoding stays disallowed for it (§2.9.4). Point `--approved-drafters FILE` or
+`$MLPERF_ENDPOINTS_APPROVED_DRAFTERS` at a newer published list.
+
+All six initial drafter approvals are recorded against `2026-09-C1`: the reference
+README published them on 2026-09-10 (endpoints#494) and 2026-09-30 (endpoints#519), before
+the `2026-10-C0` publication, and §2.9.4 records an approval against the cohort in which the
+list is published. (Counted from the next publication date instead, the DeepSeek-V4.1-Flash
+entry would be `2026-10-C0`.) The two-cohort approval lead time makes their earliest eligible
+target cohort `2026-10-C1`.
+Approval cohorts are recorded per drafter, so future additions can carry later
+cohorts in the same registry.
 
 The published sets ship as data (`src/submission_checker/data/seed_sets.yaml`), mirrored
 from the policies repo's `seedset.yaml`. The file's `cohort-id` is the cohort its sets
@@ -478,7 +491,7 @@ set published after this release.
 | `metric-consistency-tpot-p90` | §9.1 | Reported TPOT P90 present, finite, strictly positive |
 | `metric-consistency-tps-per-user` | §9.1 | Stored `tps_per_user` matches `1000 / tpot_p90_ms` |
 | `metric-consistency-tps-per-kw` | §4.5.3 | Stored `system_tps_per_kw` matches `system_tps / point_power_kw` — see [per-point normalisation](#per-point-normalisation-453) |
-| `agentic-metric-consistency` | §4.1 | `e2e_avg_interactivity` is derivable from its reported inputs |
+| `agentic-metric-consistency` | §4.1 | `e2e_avg_interactivity` is derivable from its reported inputs: the per-turn sums, or the client's `output_sequence_lengths.total / (latency.total / 1e9)` when no sample failed (latency is in nanoseconds) |
 
 ### Accuracy (§15)
 

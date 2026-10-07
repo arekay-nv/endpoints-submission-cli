@@ -70,6 +70,8 @@ class PointSummary(BaseModel):
     ttft: PercentileStats = Field(default_factory=PercentileStats)
     tpot: PercentileStats = Field(default_factory=PercentileStats)
     output_sequence_lengths: PercentileStats = Field(default_factory=PercentileStats)
+    #: Per-sample request latency in nanoseconds; ``total`` is its sum over the samples.
+    latency: PercentileStats = Field(default_factory=PercentileStats)
 
     #: §4.1 agentic inputs. Summed across every completed turn of every trajectory;
     #: e2e_turn_time excludes tool-call execution time.
@@ -150,11 +152,21 @@ class PointSummary(BaseModel):
         """§4.1: ``sum(output_tokens_per_turn) / sum(e2e_turn_time_seconds)``.
 
         The agentic analogue of ``tps_per_user`` — the output-token rate across
-        completed turns, one scalar per measurement point. ``None`` for a single-turn
-        benchmark, which reports neither input.
+        completed turns, one scalar per measurement point. Also derivable for
+        single-turn reports; ``None`` when usable input totals are unavailable.
+
+        The reference client reports the same two sums under its own names:
+        ``output_sequence_lengths.total`` (tokens) and ``latency.total`` (nanoseconds of
+        per-turn request latency, so tool-call time between turns is not in it). Those
+        are used when the named sums are absent, and only when no sample failed: output
+        tokens are recorded for successful turns only, latency for every terminal one,
+        which is why the client itself omits the ratio then.
         """
         tokens = self.output_tokens_per_turn_total
         seconds = self.e2e_turn_time_seconds_total
+        if tokens is None and seconds is None and self.n_samples_failed == 0:
+            tokens = self.output_sequence_lengths.total
+            seconds = self.latency.total / 1e9
         if tokens is None or seconds is None or seconds <= 0:
             return None
         return tokens / seconds

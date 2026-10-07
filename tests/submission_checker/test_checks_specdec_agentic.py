@@ -69,10 +69,75 @@ def _errors(binding: DrafterBinding, rule: str) -> list:
 
 @pytest.mark.unit
 class TestDrafterList:
-    def test_bundled_list_ships_empty(self) -> None:
-        """§2.9.4's list is not published yet; empty means "none approved"."""
+    #: The approved heads in mlcommons/endpoints examples/10_Agentic_Inference/README.md,
+    #: "Approved Checkpoints and Speculative-Decoding Heads": benchmark -> {model_id: revision}.
+    #: Qwen and DeepSeek-V4.1-Flash heads are native to their approved checkpoints.
+    _REFERENCE_HEADS = {
+        "kimi-k3": {
+            "RadixArk/Kimi-K3-DSpark": "3c5bac301d9cf392706189d82ed947feca6c2f0f",
+            "Inferact/Kimi-K3-DSpark": "cf6b8244620e7ea4b0651d214f28e89eac75bed6",
+        },
+        "deepseek-v4_1-flash": {
+            "deepseek-ai/DeepSeek-V4.1-Flash": "dba1be0a40aa45a94ad051997016db3960a90277",
+        },
+        "qwen3_6-35b-a3b": {
+            "Qwen/Qwen3.6-35B-A3B": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+            "Qwen/Qwen3.6-35B-A3B-FP8": "95a723d08a9490559dae23d0cff1d9466213d989",
+            "nvidia/Qwen3.6-35B-A3B-NVFP4": "1355db6a052410cfd62085d94b58866fd0f2c3c5",
+        },
+    }
+
+    def test_bundled_list_carries_the_reference_approved_heads(self) -> None:
         assert bundled_drafters_path().is_file()
-        assert load_approved_drafters() == {}
+        bundled = {
+            benchmark: {d.model_id: d.weight_checksum for d in drafters}
+            for benchmark, drafters in load_approved_drafters().items()
+        }
+        assert bundled == {
+            benchmark: {model_id: f"git-sha1:{rev}" for model_id, rev in heads.items()}
+            for benchmark, heads in self._REFERENCE_HEADS.items()
+        }
+
+    def test_bundled_heads_record_the_2026_09_c1_cohort(self) -> None:
+        """The README published every head before the 2026-10-C0 publication.
+
+        Qwen and Kimi on 2026-09-10 (endpoints#494), DeepSeek-V4.1-Flash on 2026-09-30
+        (endpoints#519): no earlier than each entry's own publication cohort.
+        """
+        cohorts = {
+            d.model_id: d.approved_cohort for ds in load_approved_drafters().values() for d in ds
+        }
+        assert cohorts == {
+            model_id: "2026-09-C1"
+            for heads in self._REFERENCE_HEADS.values()
+            for model_id in heads
+        }
+
+    @pytest.mark.parametrize(
+        ("target_cohort", "expected_severity"),
+        [
+            ("2026-09-C1", Severity.ERROR),
+            ("2026-10-C0", Severity.ERROR),
+            ("2026-10-C1", Severity.INFO),
+        ],
+    )
+    def test_bundled_heads_respect_their_approval_lead_time(
+        self, tmp_path: Path, target_cohort: str, expected_severity: Severity
+    ) -> None:
+        for benchmark, approved in load_approved_drafters().items():
+            for drafter in approved:
+                binding = DrafterBinding(
+                    points=[
+                        _point(tmp_path, {"weight_checksum": drafter.weight_checksum}, target_cohort)
+                    ],
+                    approved=approved,
+                    benchmark=benchmark,
+                    model_dir=tmp_path,
+                )
+                results = [
+                    r for r in binding._check_results if r.rule == "drafter-approval-lead-time"
+                ]
+                assert [r.severity for r in results] == [expected_severity], drafter.model_id
 
     def test_entries_group_by_benchmark(self, tmp_path: Path) -> None:
         path = tmp_path / "d.yaml"
@@ -266,3 +331,59 @@ class TestAgenticMetrics:
             e2e_turn_time_seconds_total=0.0,
         )
         assert summary.e2e_avg_interactivity is None
+
+    # The reference client writes the same two sums under its own names,
+    # output_sequence_lengths.total (tokens) and latency.total (ns), and leaves
+    # e2e_avg_interactivity out when any sample failed (endpoints metrics/report.py).
+
+    def test_derived_from_the_clients_token_and_latency_totals(self) -> None:
+        summary = PointSummary(
+            n_samples_completed=1,
+            duration_ns=1.0,
+            output_sequence_lengths={"total": 6000.0},
+            latency={"total": 120_000_000_000.0},
+        )
+        assert summary.e2e_avg_interactivity == pytest.approx(50.0)
+
+    def test_client_report_with_its_own_value_passes(self, tmp_path: Path) -> None:
+        """A measured client report: 30,048,888 tokens over 65,037.28 s of turn latency."""
+        result = self._result(
+            tmp_path,
+            output_sequence_lengths={"total": 30048888},
+            latency={"total": 65037277147776},
+            e2e_avg_interactivity=462.02561542857495,
+        )
+        hits = self._hits(result)
+        assert hits and all(r.severity == Severity.INFO for r in hits)
+
+    def test_client_report_with_a_wrong_value_errors(self, tmp_path: Path) -> None:
+        result = self._result(
+            tmp_path,
+            output_sequence_lengths={"total": 6000.0},
+            latency={"total": 120_000_000_000.0},
+            e2e_avg_interactivity=999.0,
+        )
+        errors = [r for r in self._hits(result) if r.severity == Severity.ERROR]
+        assert [r.key for r in errors] == ["fail-2"]  # a mismatch, not missing inputs
+
+    def test_client_totals_are_not_paired_when_a_sample_failed(self) -> None:
+        """Tokens cover successful turns only and latency every terminal one."""
+        totals = {
+            "n_samples_completed": 1,
+            "duration_ns": 1.0,
+            "output_sequence_lengths": {"total": 6000.0},
+            "latency": {"total": 120_000_000_000.0},
+        }
+        assert PointSummary(**totals).e2e_avg_interactivity == pytest.approx(50.0)
+        assert PointSummary(**totals, n_samples_failed=1).e2e_avg_interactivity is None
+
+    def test_the_named_sums_take_precedence_over_the_client_totals(self) -> None:
+        summary = PointSummary(
+            n_samples_completed=1,
+            duration_ns=1.0,
+            output_tokens_per_turn_total=6000.0,
+            e2e_turn_time_seconds_total=120.0,
+            output_sequence_lengths={"total": 1.0},
+            latency={"total": 1_000_000_000.0},
+        )
+        assert summary.e2e_avg_interactivity == pytest.approx(50.0)

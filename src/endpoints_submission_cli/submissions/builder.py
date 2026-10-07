@@ -602,8 +602,18 @@ def _write_point_dirs(
         _write_point_system_desc(point_dir, primary, max_tps)
 
         _write_point_extra_files(point_dir, primary, max_tps)
+        # A `--mode both` run is filed as performance but also carries accuracy/; use it
+        # when no separate accuracy run exists. Its top-level results.json is the
+        # performance request log, so only accuracy/ counts.
+        if accuracy_run is None and _carries_accuracy(primary):
+            accuracy_run = primary
         if accuracy_run is not None:
             _write_accuracy_results(point_dir, accuracy_run)
+
+
+def _carries_accuracy(run: dict[str, Any]) -> bool:
+    """Whether a run's archive holds an ``accuracy/`` phase directory."""
+    return any(rel.startswith(f"{layout.ACCURACY_SUBDIR}/") for rel in run.get("_extra_files", {}))
 
 
 #: Marker delimiting the block the builder appends to a copied point.yaml.
