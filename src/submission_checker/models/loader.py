@@ -18,9 +18,12 @@ from typing import Any
 
 import yaml
 from pydantic import ValidationError
+from pydantic_core import ErrorDetails
 
+from .. import messages
+from ..messages import PYDANTIC, SHARED, Invalid, MessageCatalogError
 from .file import AccuracyResult, PointConfig, PointSummary, SystemDescription, SystemPower
-from .results import CheckResult, err
+from .results import CheckResult, err, field_err
 
 #: A load failure: the ``_shared`` catalog message and the values it needs.
 _LoadError = tuple[str, dict[str, object]]
@@ -56,17 +59,30 @@ def _load_failure(rule: str, path: Path, failure: _LoadError) -> list[CheckResul
     return [err(rule, key, path, **params)]
 
 
+def _brief(value: object, limit: int = 60) -> str:
+    text = repr(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _problem(error: ErrorDetails) -> tuple[str, str, dict[str, object]]:
+    """The catalog message for one Pydantic error: (rule, key, values)."""
+    ctx = dict(error.get("ctx") or {})
+    cause = ctx.get("error")
+    if isinstance(cause, Invalid):
+        return cause.rule, cause.key, cause.params
+    if error["type"] in messages.catalog()[PYDANTIC].messages:
+        return PYDANTIC, error["type"], {**ctx, "input": _brief(error["input"])}
+    if messages.strict:
+        raise MessageCatalogError(
+            f"no {PYDANTIC} message for Pydantic error {error['type']!r}: {error['msg']}"
+        )
+    return SHARED, "unworded-error", {"message": error["msg"]}
+
+
 def _validation_errors(exc: ValidationError, rule: str, path: Path) -> list[CheckResult]:
     return [
-        err(
-            rule,
-            "field-invalid",
-            path,
-            file=path.name,
-            field=".".join(str(part) for part in e["loc"]) or "(top level)",
-            problem=e["msg"],
-        )
-        for e in exc.errors()
+        field_err(rule, path, ".".join(str(part) for part in e["loc"]), *_problem(e))
+        for e in exc.errors(include_url=False)
     ]
 
 

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from ..messages import render
+from ..messages import SHARED, catalog, render
 
-__all__ = ["CheckResult", "Report", "Severity", "err", "ok", "warn"]
+__all__ = ["CheckResult", "Report", "Severity", "err", "field_err", "ok", "warn"]
 
 
 class Severity(str, Enum):
@@ -84,6 +85,36 @@ def warn(rule: str, key: str, path: Path | None = None, /, **params: object) -> 
 def err(rule: str, key: str, path: Path | None = None, /, **params: object) -> CheckResult:
     """An ERROR result — the check failed."""
     return _result(Severity.ERROR, rule, key, path, params)
+
+
+def field_err(
+    rule: str, path: Path, field: str, source: str, key: str, params: Mapping[str, object]
+) -> CheckResult:
+    """An ERROR for one field of a file that failed validation.
+
+    *source* and *key* name the catalog message saying what is wrong: a rule's own
+    message raised as :class:`~submission_checker.messages.Invalid`, or a
+    :data:`~submission_checker.messages.PYDANTIC` one. The shared ``field-invalid``
+    message places it in the file and field; the result keeps its fix and spec.
+    """
+    problem = render(source, key, params)
+    where = {"file": path.name, "problem": problem.text}
+    located = (
+        render(SHARED, "field-invalid", {**where, "field": field})
+        if field
+        else render(SHARED, "file-invalid", where)
+    )
+    entry = catalog().get(rule)
+    return CheckResult(
+        rule=rule,
+        key=key,
+        title=entry.title if entry is not None else rule,
+        message=located.text,
+        fix=problem.fix,
+        severity=Severity.ERROR,
+        path=path,
+        spec_ref=problem.spec or (entry.spec if entry is not None else ""),
+    )
 
 
 class Report(BaseModel):

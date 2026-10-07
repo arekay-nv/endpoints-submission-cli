@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ...messages import fragment
+from ...messages import Invalid, fragment
 
 __all__ = ["DpShortfall", "NodesUsed", "PointConfig", "RuntimeSettings", "WarmupSpec"]
 
@@ -93,14 +93,14 @@ class WarmupSpec(BaseModel):
     @model_validator(mode="after")
     def _check_completed_le_issued(self) -> WarmupSpec:
         if self.requests_completed > self.requests_issued:
-            raise ValueError(
-                f"requests_completed ({self.requests_completed})"
-                f" > requests_issued ({self.requests_issued})"
+            raise Invalid(
+                "point-config-valid",
+                "warmup-completed-exceeds-issued",
+                completed=self.requests_completed,
+                issued=self.requests_issued,
             )
         if self.concurrency == 0 and not self.is_disabled:
-            raise ValueError(
-                "Warmup concurrency must be positive when duration or requests are nonzero"
-            )
+            raise Invalid("point-config-valid", "warmup-concurrency-zero")
         return self
 
 

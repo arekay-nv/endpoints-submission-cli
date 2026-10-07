@@ -7,22 +7,46 @@ Every result names a rule and a message key and passes the values the message ne
 hold both sides together: each key the code uses exists, each call passes exactly
 the placeholders its template needs, and the catalog carries nothing the code no
 longer produces.
+
+Validation errors are held to the same standard. The file models raise
+:class:`~submission_checker.messages.Invalid` rather than ``ValueError``, and every
+Pydantic error type their schemas can produce has a ``_pydantic`` message.
 """
 
 from __future__ import annotations
 
 import ast
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
+from pydantic import BaseModel
+from pydantic_core._pydantic_core import list_all_errors
 
 import submission_checker
 from submission_checker import messages
-from submission_checker.messages import SHARED, MessageCatalogError, placeholders
+from submission_checker.messages import PYDANTIC, SHARED, MessageCatalogError, placeholders
+from submission_checker.models.file import (
+    AccuracyResult,
+    PointConfig,
+    PointSummary,
+    SystemDescription,
+    SystemPower,
+)
+from submission_checker.models.loader import (
+    load_accuracy_result,
+    load_point_config,
+    load_result_summary,
+    load_system_description,
+    load_system_power,
+)
 
 _SRC = Path(submission_checker.__file__).parent
-_RESULT_FUNCS = {"ok", "warn", "err", "_ok", "_warn", "_err", "fragment"}
+_RESULT_FUNCS = {"ok", "warn", "err", "_ok", "_warn", "_err", "fragment", "Invalid"}
+#: Catalog sections that no single rule's code produces.
+_SECTIONS = {SHARED, PYDANTIC}
 
 #: Calls whose rule is a variable, and the rules it can take. The coverage loop
 #: picks one of three region rules; the loaders and the score helper report under
@@ -138,7 +162,7 @@ class TestCatalogMatchesCode:
         unused = [
             f"{rule}.{key}"
             for rule, entry in _CATALOG.items()
-            if rule != SHARED
+            if rule not in _SECTIONS
             for key in entry.messages
             if (rule, key) not in used
         ]
@@ -149,7 +173,7 @@ class TestCatalogMatchesCode:
 class TestCatalog:
     def test_every_rule_has_a_title_and_spec(self) -> None:
         for rule, entry in _CATALOG.items():
-            if rule == SHARED:
+            if rule in _SECTIONS:
                 continue
             assert entry.title and entry.title != rule, rule
             assert entry.spec.startswith("§"), f"{rule}: spec {entry.spec!r}"
@@ -189,3 +213,169 @@ class TestRendering:
         rendered = messages.render("model-name-valid", "no-such-key", {"name": "x"})
         assert rendered.text == "model-name-valid (no-such-key): name='x'"
         assert rendered.title == "Benchmark model name"
+
+
+#: The models each loader validates, and the Pydantic error types each kind of core
+#: schema node can produce. A node kind missing from both maps fails the test, so a
+#: new field type is classified before it reaches a submitter.
+_FILE_MODELS: list[type[BaseModel]] = [
+    AccuracyResult,
+    PointConfig,
+    PointSummary,
+    SystemDescription,
+    SystemPower,
+]
+_NODE_ERRORS = {
+    "model-field": {"missing"},
+    "model": {"model_type"},
+    "model-fields": {"model_attributes_type"},
+    "str": {"string_type"},
+    "int": {"int_type", "int_parsing", "int_from_float"},
+    "float": {"float_type", "float_parsing"},
+    "bool": {"bool_type", "bool_parsing"},
+    "literal": {"literal_error"},
+    "enum": {"enum"},
+    "dict": {"dict_type"},
+    "list": {"list_type"},
+}
+_SILENT_NODES = {
+    "any",
+    "computed-field",
+    "default",
+    "definition-ref",
+    "definitions",
+    "function-after",
+    "function-before",
+    "no-info",
+    "nullable",
+    "union",
+    "with-info",
+}
+_CONSTRAINT_ERRORS = {
+    "gt": "greater_than",
+    "ge": "greater_than_equal",
+    "lt": "less_than",
+    "le": "less_than_equal",
+}
+
+
+def _reachable_errors(schema: object, found: set[str]) -> None:
+    if isinstance(schema, list | tuple):
+        for item in schema:
+            _reachable_errors(item, found)
+        return
+    if not isinstance(schema, dict):
+        return
+    kind = schema.get("type")
+    if isinstance(kind, str):
+        assert kind in _NODE_ERRORS or kind in _SILENT_NODES, f"unclassified schema node {kind!r}"
+        found |= _NODE_ERRORS.get(kind, set())
+        found |= {error for name, error in _CONSTRAINT_ERRORS.items() if name in schema}
+        if "min_length" in schema:
+            found.add("string_too_short" if kind == "str" else "too_short")
+        if "max_length" in schema:
+            found.add("string_too_long" if kind == "str" else "too_long")
+        if "pattern" in schema:
+            found.add("string_pattern_mismatch")
+        if schema.get("allow_inf_nan") is False:
+            found.add("finite_number")
+        if (schema.get("config") or {}).get("extra_fields_behavior") == "forbid":
+            found.add("extra_forbidden")
+    for name, value in schema.items():
+        if name not in {"serialization", "metadata"}:  # output and annotations, not validation
+            _reachable_errors(value, found)
+
+
+@pytest.mark.unit
+class TestValidationWording:
+    def test_models_raise_invalid_not_value_error(self) -> None:
+        bare = []
+        for path in sorted((_SRC / "models").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if (
+                    isinstance(node, ast.Raise)
+                    and isinstance(node.exc, ast.Call)
+                    and isinstance(node.exc.func, ast.Name)
+                    and node.exc.func.id in {"ValueError", "AssertionError", "TypeError"}
+                ):
+                    bare.append(f"{path.relative_to(_SRC)}:{node.lineno}")
+        assert not bare, "raise Invalid(rule, key, ...) instead:\n" + "\n".join(bare)
+
+    def test_pydantic_messages_match_the_reachable_errors(self) -> None:
+        found: set[str] = set()
+        for model in _FILE_MODELS:
+            _reachable_errors(model.__pydantic_core_schema__, found)
+        assert "missing" in found  # guards against the walk matching nothing
+        worded = set(_CATALOG[PYDANTIC].messages)
+        assert not found - worded, f"add {PYDANTIC} messages for: {sorted(found - worded)}"
+        assert not worded - found, f"no file model can raise: {sorted(worded - found)}"
+
+    def test_pydantic_messages_use_only_the_error_context(self) -> None:
+        contexts = {e["type"]: set(e["example_context"] or {}) for e in list_all_errors()}
+        for key, message in _CATALOG[PYDANTIC].messages.items():
+            assert key in contexts, f"{key} is not a Pydantic error type"
+            extra = _needs(message) - contexts[key] - {"input"}
+            assert not extra, f"{PYDANTIC}.{key} uses {sorted(extra)}"
+
+
+_BAD_FILES = [
+    pytest.param(
+        load_system_description,
+        "system_desc.json",
+        {
+            "division": "open",
+            "publication_status": "available",
+            "system_availability_status": "preview",
+        },
+        "system_desc.json: the availability fields disagree"
+        " (publication_status='available', system_availability_status='preview')",
+        id="model-level-invalid",
+    ),
+    pytest.param(
+        load_system_power,
+        "system_power.json",
+        {
+            "node_sets": [
+                {"published_power": {"value_w": 1, "source_type": "x", "source": "y", "bogus": 1}}
+            ]
+        },
+        "system_power.json, field `node_sets.0.published_power.bogus`: not a recognised field",
+        id="extra-forbidden",
+    ),
+    pytest.param(
+        load_point_config,
+        "point.yaml",
+        {"warmup": {"requests_completed": 5, "requests_issued": "two"}},
+        "point.yaml, field `warmup.requests_issued`: expected a whole number, got 'two'",
+        id="int-parsing",
+    ),
+    pytest.param(
+        load_result_summary,
+        "results.json",
+        {"ttft": {"percentiles": {"p99": 1.0}}},
+        "results.json, field `ttft.percentiles`: 'p99' is not a percentile between 0 and 100",
+        id="field-level-invalid",
+    ),
+    pytest.param(
+        load_accuracy_result,
+        "accuracy.json",
+        {"accuracy_scores": [{"dataset_name": "a", "score": 1}, {"dataset_name": "a", "score": 1}]},
+        "accuracy.json: dataset 'a' appears more than once",
+        id="before-validator-invalid",
+    ),
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("loader", "name", "content", "expected"), _BAD_FILES)
+def test_validation_errors_are_worded_by_the_catalog(
+    tmp_path: Path, loader, name: str, content: dict, expected: str
+) -> None:
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(content) if name.endswith(".yaml") else json.dumps(content))
+    model, results = loader(path)
+    assert model is None
+    assert expected in [r.message for r in results]
+    for result in results:  # strict mode has rendered every one from the catalog
+        assert "Value error" not in result.message
+        assert "Input should" not in result.message

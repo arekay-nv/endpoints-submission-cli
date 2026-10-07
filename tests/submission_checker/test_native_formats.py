@@ -153,7 +153,7 @@ def test_duplicate_percentile_aliases_must_agree(same_value):
     if same_value:
         assert PointSummary.model_validate(payload).tpot.percentiles == {"90": 100}
     else:
-        with pytest.raises(ValidationError, match="Conflicting values"):
+        with pytest.raises(ValidationError, match="give different values"):
             PointSummary.model_validate(payload)
 
 
