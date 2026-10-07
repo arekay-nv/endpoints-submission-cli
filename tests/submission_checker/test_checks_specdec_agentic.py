@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from submission_checker.cohorts import Cohort
 from submission_checker.drafters import (
     ApprovedDrafter,
     DrafterListError,
@@ -69,10 +70,47 @@ def _errors(binding: DrafterBinding, rule: str) -> list:
 
 @pytest.mark.unit
 class TestDrafterList:
-    def test_bundled_list_ships_empty(self) -> None:
-        """§2.9.4's list is not published yet; empty means "none approved"."""
+    #: The approved heads in mlcommons/endpoints examples/10_Agentic_Inference/README.md,
+    #: "Approved Checkpoints and Speculative-Decoding Heads": benchmark -> {model_id: revision}.
+    #: Qwen and DeepSeek-V4.1-Flash heads are native to their approved checkpoints.
+    _REFERENCE_HEADS = {
+        "kimi-k3": {
+            "RadixArk/Kimi-K3-DSpark": "3c5bac301d9cf392706189d82ed947feca6c2f0f",
+            "Inferact/Kimi-K3-DSpark": "cf6b8244620e7ea4b0651d214f28e89eac75bed6",
+        },
+        "deepseek-v4_1-flash": {
+            "deepseek-ai/DeepSeek-V4.1-Flash": "dba1be0a40aa45a94ad051997016db3960a90277",
+        },
+        "qwen3_6-35b-a3b": {
+            "Qwen/Qwen3.6-35B-A3B": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+            "Qwen/Qwen3.6-35B-A3B-FP8": "95a723d08a9490559dae23d0cff1d9466213d989",
+            "nvidia/Qwen3.6-35B-A3B-NVFP4": "1355db6a052410cfd62085d94b58866fd0f2c3c5",
+        },
+    }
+
+    def test_bundled_list_carries_the_reference_approved_heads(self) -> None:
         assert bundled_drafters_path().is_file()
-        assert load_approved_drafters() == {}
+        bundled = {
+            benchmark: {d.model_id: d.weight_checksum for d in drafters}
+            for benchmark, drafters in load_approved_drafters().items()
+        }
+        assert bundled == {
+            benchmark: {model_id: f"git-sha1:{rev}" for model_id, rev in heads.items()}
+            for benchmark, heads in self._REFERENCE_HEADS.items()
+        }
+
+    def test_bundled_heads_are_recorded_against_the_lists_first_cohort(self) -> None:
+        """Every entry counts from 2026-09-C0, when the README first published the list."""
+        cohorts = {
+            d.model_id: d.approved_cohort for ds in load_approved_drafters().values() for d in ds
+        }
+        assert set(cohorts.values()) == {"2026-09-C0"}
+
+    def test_bundled_heads_are_usable_in_the_2026_10_c1_cohort(self) -> None:
+        target = Cohort.parse("2026-10-C1")
+        for drafters in load_approved_drafters().values():
+            for drafter in drafters:
+                assert drafter.earliest_target_cohort() <= target, drafter.model_id
 
     def test_entries_group_by_benchmark(self, tmp_path: Path) -> None:
         path = tmp_path / "d.yaml"

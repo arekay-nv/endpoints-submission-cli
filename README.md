@@ -454,11 +454,15 @@ not satisfy High Concurrency coverage.
 | `drafter-approval-lead-time` | §2.9.4 | Approved at least two cohorts before `target_cohort` |
 | `drafter-list-registry` | §2.9.4 | Warns when the drafter list itself cannot be read |
 
-The approved list ships as data (`src/submission_checker/data/approved_drafters.yaml`)
-and is **empty** — §2.9.4's list has not been published yet, and an empty registry means
-speculative decoding is not permitted for any benchmark, which is §2.9.4's own rule for a
-benchmark with no approved drafter. Point `--approved-drafters FILE` or
-`$MLPERF_ENDPOINTS_APPROVED_DRAFTERS` at a published list.
+The approved list ships as data (`src/submission_checker/data/approved_drafters.yaml`),
+transcribed from the agentic reference README's "Approved Checkpoints and
+Speculative-Decoding Heads" (mlcommons/endpoints `examples/10_Agentic_Inference`): the
+Kimi K3 DSpark heads, and the native heads of the approved DeepSeek-V4.1-Flash and
+Qwen3.6-35B-A3B checkpoints. Each is weight-identified by its Hugging Face revision
+(`weight_checksum: git-sha1:<revision>`), which a point's `speculative_decoding` block must
+declare to match. A benchmark with no entry has no approved drafter, so speculative
+decoding stays disallowed for it (§2.9.4). Point `--approved-drafters FILE` or
+`$MLPERF_ENDPOINTS_APPROVED_DRAFTERS` at a newer published list.
 
 The published sets ship as data (`src/submission_checker/data/seed_sets.yaml`), mirrored
 from the policies repo's `seedset.yaml`. The file's `cohort-id` is the cohort its sets
