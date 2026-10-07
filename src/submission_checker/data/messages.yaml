@@ -1,0 +1,730 @@
+# Wording of every submission-checker result. See submission_checker/messages.py.
+#
+# Each rule has a title, the spec section it enforces, and its messages by key. A
+# message is either a template string or a mapping with `text`, an optional `fix`
+# (what the submitter should do) and an optional `spec` overriding the rule's.
+#
+# Templates use {name} placeholders filled from the values the code passes in;
+# {name!r} and {name:.2f} work, attribute and index access ({a.b}, {a[0]}) do not.
+# Severity is not here: it decides the verdict, so it stays with the rule in code.
+#
+# tests/submission_checker/test_messages.py checks that every key the code uses
+# exists here and that each template's placeholders match the values passed.
+
+_shared:
+  title: Shared messages
+  spec: ''
+  messages:
+    file-not-found:
+      text: 'File not found: {file_path}'
+    parse-error:
+      text: '{format} parse error in {file}: {error}'
+    not-a-mapping:
+      text: Expected a {format} mapping in {file}
+    io-error:
+      text: 'IO error reading {file}: {error}'
+    field-invalid:
+      text: 'Validation error in {file}: {field} — {problem}'
+    score-not-fraction:
+      text: 'r{concurrency}: `{dataset}` score {value} is not a fraction in [0, 1], which is what the
+        reference scorer reports'
+      spec: §4.3
+accuracy-coverage:
+  title: Accuracy at the mandatory points
+  spec: §5.3
+  messages:
+    pass: Accuracy present in all four mandatory bands ({accuracy_by_point_count} point(s) carry results;
+      §5.3 N={value})
+    pass-2: Offline point r{concurrency} carries accuracy results
+    fail:
+      text: Offline point r{concurrency} has no accuracy results; §5.3 counts it among the N required
+        points
+      fix: Run accuracy at the Offline point r{concurrency} too.
+    missing-bands:
+      text: 'No accuracy results at a point in: {bands}'
+      fix: 'Run accuracy at one point in each of: {bands}.'
+accuracy-gate:
+  title: Accuracy gate
+  spec: §15
+  messages:
+    no-thresholds:
+      text: No accuracy thresholds are defined for {model!r}, so its accuracy was not gated
+      fix: Thresholds exist only for the allowed benchmark models; see model-name-valid.
+    warn-2: results.json exposes only an unnamed scalar accuracy score; gating it as '{only_metric}'.
+      Secondary metrics (if any) are not present in results.json and are not checked.
+    fail: '{matched_key} = {score:.4f} < min {lower:.4f}'
+    fail-2: '{matched_key} = {score:.4f} > max {upper:.4f}'
+    pass: '{matched_key} = {score:.4f} PASSED (target {bound})'
+accuracy-present:
+  title: Accuracy results present
+  spec: §15
+  messages:
+    pass: At least one model has accuracy results
+    fail:
+      text: No model in this submission has accuracy results (accuracy_results.json or accuracy_scores
+        in results.json)
+      fix: Include accuracy_results.json, or accuracy_scores in results.json, at the mandatory points.
+accuracy-sample-count:
+  title: Accuracy sample count
+  spec: §15
+  messages:
+    fail: '{total} samples{suffix} < required {min_queries}'
+    pass: '{total} samples{suffix} ≥ required {min_queries}'
+accuracy-valid:
+  title: Accuracy results file
+  spec: §4.3
+  messages:
+    fail: accuracy_result.json is empty
+agentic-accuracy:
+  title: Agentic accuracy
+  spec: §3.2
+  messages:
+    warn: Agentic curve for model '{model_dir_name}', which is not one of the agentic benchmarks the reference
+      implementation publishes thresholds for — no agentic accuracy gate applied
+    warn-2: '{targets_name}: the reference implementation records its accuracy thresholds and SWE-bench
+      evaluation policy as TBD, so no agentic accuracy gate can be applied to this submission'
+agentic-accuracy-inline:
+  title: Agentic accuracy inline
+  spec: §4.3
+  messages:
+    warn: 'No point reports a `{inline_dataset}` accuracy score; official agentic submissions set `accuracy_config.eval_method:
+      agentic_inference_inline` on the performance dataset'
+    fail: 'r{concurrency}: inline accuracy {score:.2f} < {inline_min} required for {targets_name}'
+    pass: 'r{concurrency}: inline accuracy {score:.2f} ≥ {inline_min}'
+agentic-accuracy-swebench:
+  title: Agentic accuracy swebench
+  spec: §4.3
+  messages:
+    warn: No mandatory-band point reports a `{swebench_dataset}` accuracy score; official agentic submissions
+      must enable SWE-bench accuracy
+    fail: SWE-bench {basis} = {mean:.2f} < {swebench_min} required for {targets_name}
+    warn-2: '{replace} has {results_count} SWE-bench results ({listed}); §4.3 expects one per region,
+      so they are averaged into one value for the band'
+    warn-3: SWE-bench {basis} = {mean:.2f} ≥ {swebench_min}, but §4.3 averages one result from each of
+      the {swebench_mean_of_n} mandatory regions
+    pass: SWE-bench {basis} = {mean:.2f} ≥ {swebench_min}
+agentic-metric-consistency:
+  title: Agentic metric consistency
+  spec: §4.1
+  messages:
+    pass: e2e_avg_interactivity={derived:.4f} tok/s across completed turns
+    fail: e2e_avg_interactivity {stored!r} is reported, but the summary states no output_tokens_per_turn_total
+      / e2e_turn_time_seconds_total to derive it from (§4.1)
+    fail-2: stored e2e_avg_interactivity {stored:.4f} ≠ derived {derived:.4f} (rel err {rel_err:.1%})
+agentic-osl-range:
+  title: Agentic OSL range
+  spec: §4.3
+  messages:
+    warn: No `{osl_full_run_field}.output_sequence_lengths.avg` in result_summary.json for {listed}; the
+      windowed `output_sequence_lengths` is explicitly not the field to gate
+    pass: 'r{concurrency}: full-run OSL per-turn mean {avg:.1f} within {low:g}–{high:g} tokens'
+    fail: 'r{concurrency}: full-run OSL per-turn mean {avg:.1f} outside {low:g}–{high:g} tokens required
+      for {targets_name}'
+approved-drafter:
+  title: Approved drafter
+  spec: §2.9.4
+  messages:
+    fail: Point {concurrency} uses speculative decoding, but no drafter is approved for {benchmark!r}.
+      §2.9.4 disallows speculative decoding entirely for a benchmark with no approved drafter (--approved-drafters
+      points at a newer published list)
+    pass: 'Point {concurrency}: drafter matches an approved entry'
+    fail-2: 'Point {concurrency}: declared drafter matches no approved entry for {benchmark!r}. §2.9.4
+      identifies an entry by weight checksum, or by target checksum plus configuration'
+benchmark-model-dir:
+  title: Benchmark-model directory
+  spec: §1
+  messages:
+    fail:
+      text: No benchmark-model directories in results/{system_id}/
+      fix: Add a results/{system_id}/<benchmark_model>/ directory holding the r<N>/ points.
+benchmark-type-consistency:
+  title: Benchmark type consistency
+  spec: §6.1, §8.5
+  messages:
+    pass: 'Benchmark type consistent: {patterns!r} ({value})'
+    fail:
+      text: Points disagree on `runtime_settings.load_pattern` ({patterns}); one result is a single benchmark,
+        and §5.3/§5.7 apply differently to agentic and single-turn benchmarks
+      spec: §6.1, §8.5
+concurrency-in-range:
+  title: Concurrency in range
+  spec: §9
+  messages:
+    pass:
+      text: 'Dedicated Offline run: concurrency {concurrency} is the dataset cardinality (§5.7.1), exempt
+        from the region range'
+      spec: §5.7.1
+    fail: 'Concurrency {concurrency} exceeds the maximum valid range (including the 10% margin: {end})'
+    pass-2: Concurrency {concurrency} valid ({region})
+config-consistency-dataset:
+  title: Config consistency dataset
+  spec: §9.1
+  messages:
+    fail: 'Inconsistent datasets across points: {datasets}'
+    pass: 'Dataset consistent: {next}'
+config-consistency-model:
+  title: Config consistency model
+  spec: §9.1
+  messages:
+    pass: 'Model consistent: {next}'
+    fail: Points disagree on model_name ({names}); one result is a single benchmark model
+drafter-approval-lead-time:
+  title: Drafter approval lead time
+  spec: §2.9.4
+  messages:
+    warn: 'Point {concurrency}: lead time unevaluable — target_cohort={target_cohort!r}, approved_cohort={approved_cohort!r}'
+    fail: 'Point {concurrency}: drafter approved in {approved_cohort}, so the earliest usable target_cohort
+      is {earliest} ({drafter_approval_lead_cohorts} cohorts later); this submission targets {target}'
+    pass: 'Point {concurrency}: target_cohort {target} ≥ earliest usable {earliest}'
+drafter-list-registry:
+  title: Approved-drafter registry
+  spec: §2.9.4
+  messages:
+    unavailable: '{detail}'
+high-concurrency-coverage:
+  title: High Concurrency coverage
+  spec: §§3–6
+  messages:
+    pass: '{label} region covered: {covered} (range {bounds})'
+    fail:
+      text: No point in the {label} region (concurrency {bounds})
+      fix: Add a point with concurrency in {bounds}.
+load-pattern:
+  title: Load pattern
+  spec: §10
+  messages:
+    pass:
+      text: 'Offline point: load pattern {lp!r} exempt from fixed concurrency'
+      spec: §6.1
+    fail: 'Point {concurrency}: load_pattern {lp!r} is not one of §6.1''s fixed-concurrency patterns ({valid_load_patterns})'
+    fail-2: concurrency must be positive, got {concurrency}
+    pass-2: 'Point {concurrency}: load pattern OK ({lp})'
+low-concurrency-coverage:
+  title: Low Concurrency coverage
+  spec: §§3–6
+  messages:
+    pass: '{label} region covered: {covered} (range {bounds})'
+    fail:
+      text: No point in the {label} region (concurrency {bounds})
+      fix: Add a point with concurrency in {bounds}.
+max-concurrency-declared:
+  title: Maximum supported concurrency
+  spec: §7
+  messages:
+    pass: max_supported_concurrency = {c_max}
+maximal-engagement:
+  title: Maximal engagement
+  spec: §4.5.3
+  messages:
+    warn: '{label}: system_desc.json declares no tensor/pipeline/expert/data parallelism, so §4.5.3''s
+      engagement cannot be checked'
+    warn-2: '{label}: disaggregated serving — §4.5.3''s A_replica = TP × PP × EP does not describe a prefill/decode
+      split, so engagement is left to peer review'
+    warn-3: '{label}: accelerators per node are not known for every node set, so A_provisioned cannot
+      be derived'
+    fail: '{label}: TP, PP, EP and DP must each be at least 1'
+    fail-2: '{label}: DP {dp} × A_replica {a_replica} = {value} accelerators, more than the {a_prov} provisioned
+      ({formula})'
+    fail-3: '{label}: DP {dp} is below {formula}, and the point declares no dp_shortfall (§8.3)'
+    fail-4: '{label}: dp_shortfall declares DP {dp_actual} of {dp_formula}, but the point runs DP {dp}
+      of {formula}'
+    warn-5: '{label}: DP {dp} below {formula}, declared as a shortfall: {reason!r} — subject to Methodology
+      objection at peer review'
+    pass: '{label}: DP {dp} = {formula}, engaging {engaged} of {a_prov}'
+    shortfall-unneeded: '{label}: DP {dp} = {formula}, engaging {engaged} of {a_prov}; dp_shortfall is
+      declared but there is no shortfall'
+measurement-points-present:
+  title: Point configuration present
+  spec: §1
+  messages:
+    fail:
+      text: No usable r<N>/point.yaml files in {relative_to}
+      fix: Each r<N>/ directory needs a point.yaml that parses; see the point-config errors for what is
+        wrong.
+    fail-2:
+      text: Missing point.yaml in {relative_to}/
+      fix: Add the point's point.yaml (§8.3 disclosure) to this directory.
+med-concurrency-coverage:
+  title: Medium Concurrency coverage
+  spec: §§3–6
+  messages:
+    pass: '{label} region covered: {covered} (range {bounds})'
+    fail:
+      text: No point in the {label} region (concurrency {bounds})
+      fix: Add a point with concurrency in {bounds}.
+metric-consistency-accounting:
+  title: Metric consistency accounting
+  spec: §14
+  messages:
+    fail: completed ({n_samples_completed}) + failed ({n_samples_failed}) = {accounted} ≠ issued ({n_samples_issued})
+    pass: 'Sample accounting consistent: {n_samples_issued} issued'
+metric-consistency-duration:
+  title: Metric consistency duration
+  spec: §14
+  messages:
+    fail: 'duration_ns is not positive: {duration_ns}'
+    pass: duration_ns={duration_ns:.0f} ns
+metric-consistency-output-tokens:
+  title: Metric consistency output tokens
+  spec: §14
+  messages:
+    fail: 'total_output_tokens is negative: {total_output_tokens}'
+    pass: total_output_tokens={total_output_tokens}
+metric-consistency-system-tps:
+  title: Metric consistency system TPS
+  spec: §9.1
+  messages:
+    pass: system_tps={derived:.3f} tok/s ({total_output_tokens} tokens / {elapsed_duration_seconds:.1f}s)
+    fail: stored system_tps {stored:.3f} ≠ derived {derived:.3f} (rel err {rel_err:.1%})
+metric-consistency-tpot-p90:
+  title: Metric consistency TPOT p90
+  spec: §9.1
+  messages:
+    pass: Reported TPOT P90 = {p90:.4f} ms (distribution itself is not verifiable from the summary)
+    fail: No TPOT P90 reported (result_summary.json has no tpot.percentiles['90']); tps_per_user is defined
+      as 1000 / tpot_p90_ms and has no other source
+    fail-2: Reported TPOT P90 is {p90}, which is not finite and strictly positive
+metric-consistency-tps-per-kw:
+  title: Metric consistency TPS per kW
+  spec: §4.5.3
+  messages:
+    pass: system_tps_per_kw={derived:.4f} ({system_tps:.3f} / point_power_kw {kw:.2f}, {basis})
+    fail: stored system_tps_per_kw {stored:.4f} ≠ derived system_tps / point_power_kw {kw:.2f} ({basis})
+      = {derived:.4f} (rel err {rel_err:.1%})
+metric-consistency-tps-per-user:
+  title: Metric consistency TPS per user
+  spec: §9.1
+  messages:
+    pass: tps_per_user={derived:.4f} tok/s/user (1000 / tpot_p90_ms {p90:.4f})
+    fail: stored tps_per_user {stored:.4f} ≠ derived 1000 / tpot_p90_ms {derived:.4f} (rel err {rel_err:.1%})
+min-query-count:
+  title: Min query count
+  spec: §12
+  messages:
+    fail: 'Dataset ''{dataset}'': completed {completed} < minimum {min_queries} (§6.4)'
+    pass: 'Dataset ''{dataset}'': completed {completed} ≥ minimum {min_queries}'
+model-name-consistency:
+  title: Model name consistency
+  spec: §8.1
+  messages:
+    warn: No point declares model_name, so the model directory '{model_dir_name}' cannot be checked against
+      §8.1
+    fail: Declared model '{declared}' does not match model directory '{dir_name}'
+    pass: 'Model name consistent: {dir_name}'
+model-name-valid:
+  title: Benchmark model name
+  spec: §3.2
+  messages:
+    pass: model_name {name!r} is an allowed model
+    fail:
+      text: 'model_name {name!r} is not an allowed model; must be exactly one of: {allowed}'
+      fix: Set model_name in every point.yaml to one of the allowed names, spelled exactly.
+    noncanonical:
+      text: 'model_name {name!r} is not an allowed model; write {canonical!r} (allowed: {allowed})'
+      fix: 'Write model_name: {canonical} in every point.yaml.'
+nodes-used:
+  title: Nodes used
+  spec: §4.5.3
+  messages:
+    pass: nodes_used {summary}
+    warn: nodes_used declares more nodes than the point engages ({detail}); §4.5.3 rounds up from the
+      accelerators engaged, and the extra nodes only raise this point's denominator
+    fail: '{problems}'
+    capacity-short: the declared nodes hold {capacity} accelerators, but the point's parallelism (DP {dp}
+      × TP×PP×EP {replica}) engages {used}
+    nodes-needed: ceil({used} / {per_node}) = {needed} nodes
+    fewer-nodes: '{used} accelerators fit in fewer nodes'
+    system-node-ensemble-id: system_node_ensemble_id {ensemble} is declared twice
+    system-node-ensemble-id-2: system_node_ensemble_id {ensemble} matches {matches_count} node sets in
+      system_power.json; it must resolve to exactly one
+    system-node-ensemble-id-3: 'system_node_ensemble_id {ensemble}: nodes {nodes} must be a positive whole
+      number no greater than N_s = {nodes_provisioned}'
+offline-declared:
+  title: Offline declared
+  spec: §5.7
+  messages:
+    fail: 'Invalid offline {offline!r}: must be one of {valid_offline}'
+    pass: offline={offline!r}
+offline-ordering:
+  title: Offline point ordering
+  spec: §5.7.2
+  messages:
+    warn: Offline concurrency {concurrency} < C_max {c_max} (§5.7.2)
+    warn-2: Offline system_tps {offline_tps:.3f} < {offline_tps_margin:.2f} × C_max system_tps {c_max_tps:.3f}
+      = {floor:.3f} (§5.7.2)
+    pass: Offline system_tps {offline_tps:.3f} ≥ {floor:.3f} and concurrency {concurrency} ≥ C_max {c_max}
+offline-point-present:
+  title: Offline point
+  spec: §5.7
+  messages:
+    pass: 'Offline point: r{concurrency} ({offline})'
+    fail:
+      text: '{declared_count} points declare `offline` ({listed}); §5.7 allows exactly one'
+      fix: Declare `offline` on exactly one point.
+    fail-2: 'No point declares `offline`; §5.3 requires one for every non-agentic submission. An agentic
+      submission declares `runtime_settings.load_pattern: {load_pattern_agentic}`, which this curve does
+      not'
+    fail-3: Agentic benchmark declares an Offline point ({listed}); §5.7 says an agentic submission “neither
+      requires nor may include” one
+    pass-2: 'Agentic benchmark: no Offline point, as §5.7 requires'
+    fail-4:
+      text: '`offline: elected` is declared at concurrency {concurrency}, but §5.7.2 elects the C_max
+        point and C_max = {c_max}'
+      spec: §5.7.2
+      fix: Elect the C_max point (r{c_max}), or run a dedicated Offline point instead.
+path-exists:
+  title: Submission path
+  spec: §1
+  messages:
+    pass: Submission path exists
+    fail: 'Submission path does not exist: {submission_path}'
+point-cap:
+  title: Point cap
+  spec: §2, §8
+  messages:
+    fail: '{n} points exceed the {max_points}-point cap'
+point-count:
+  title: Number of points
+  spec: §2, §8
+  messages:
+    fail:
+      text: Only {n} measurement point(s) — minimum {minimum} required
+      fix: Submit at least {minimum} points.
+    pass: 'Point count OK: {n}'
+point-dirname-concurrency:
+  title: Point dirname concurrency
+  spec: §1
+  messages:
+    warn:
+      text: '{point_dir_name}/: directory concurrency {dir_concurrency} ≠ declared {concurrency}'
+      fix: Rename the directory to r{concurrency}, or correct concurrency in point.yaml.
+point-dirs:
+  title: Pareto point directories
+  spec: §1
+  messages:
+    fail: 'Missing benchmark-model directory: {rel}/'
+    pass: 'Found {dirs_count} Pareto point director{value} in {rel}/: {dirs}'
+    fail-2:
+      text: No r<N>/ Pareto point directories in {rel}/
+      fix: Put each Pareto point in its own r<N>/ directory, named for its concurrency.
+point-disclosure-complete:
+  title: Point disclosure complete
+  spec: §8.3
+  messages:
+    fail: 'point.yaml is missing required §8.3 field(s): {missing}'
+    pass: All §8.3 disclosure fields present
+point-duration:
+  title: Point duration
+  spec: §11
+  messages:
+    warn: 'Point {c} ({region}): {basis} duration {duration_ms:.0f} ms < minimum {min_ms} ms'
+    pass: 'Point {c}: {basis} duration {duration_ms:.0f} ms meets minimum for {region}'
+point-rules-skipped:
+  title: Point rules skipped
+  spec: §1
+  messages:
+    warn: '{point_dir_name}/: point.yaml is missing or invalid, so the rules that read it (region placement,
+      metric consistency, power) were not run for this point; fixing it may report more'
+power-descriptor:
+  title: Power descriptor (system_power.json)
+  spec: §4.5.2
+  messages:
+    pass:
+      text: No system_power.json; power normalisation is not required for the {division} division
+      spec: §4.5
+    fail: Missing system_power.json for {relative_to}; §4.5.2 requires one per system
+    fail-2: cooling is {cooling!r}, but system_desc.json describes a system whose overhead fraction is
+      {overhead:g}; E.2 requires them to agree
+    warn: node_sets name system_node_ensemble_id {unknown}, which system_desc.json does not describe
+    pass-2: Provisioned power {kw:.2f} kW
+    computation-problem: '{detail}'
+    computation-warning: '{detail}'
+    absent-appendix-d-has: '{label} is absent and Appendix D has no default for it'
+    node-set-id-values: node_set_id values must be unique within the file
+    requires-published-power: '{label}: {power_method} requires published_power'
+    node-scaling-requires-nodes: '{label}: node_scaling requires nodes_in_published_rack greater than
+      nodes_provisioned ({y}), got {n}'
+    scale-up-network-required: '{label}: scale_up_network is required; use method none where there is
+      no scale-up switch'
+    bandwidth-estimate-requires-aggregate: '{label}: bandwidth_estimate requires aggregate_bandwidth_tbps'
+    energy-per-bit-pj: '{label}.energy_per_bit_pj is absent; D.1''s references depend on the link protocol,
+      so there is no default to apply'
+    energy-per-bit-pj-2: '{label}.energy_per_bit_pj must give value_pj'
+    scale-out-present-false: scale_out.present is false, but the system has {nodes} nodes and no scale-up
+      network joins them; E.4 allows false only for a single node or nodes joined by a fabric already
+      counted in scale_up_network
+    scale-out-present-false-2: scale_out.present is false for {nodes} nodes; E.4 allows that only where
+      the nodes are joined by a fabric already counted in scale_up_network, which the descriptor cannot
+      show
+    scale-out-present-true: scale_out.present is true but {missing} is missing
+    scale-out-required-bandwidth: scale_out.required_bandwidth_tbps is {required_bandwidth_tbps:g}, below
+      the {from_nics:g} Tb/s of NIC bandwidth E.4 defines it as ({nodes} nodes × {count_per_node} NICs
+      × {bandwidth_per_nic_gbps:g} Gb/s)
+    scale-out-switches-offer: scale-out switches offer {offered:g} Tb/s, below the required {required:g}
+      Tb/s
+    provisioned-power-kw-recomputed: provisioned_power_kw is {stated_kw:g}, recomputed {kw:.2f}
+    energy-figure-give-value: '{label} is an energy figure; give value_w or value_kw'
+    declared-provisioned-power-give: declared_provisioned_power must give value_kw or value_w
+    component-sum-requires-components: '{label}: component_sum requires components'
+    combined-cpu-accelerator-mutually: '{label}: combined_cpu_accelerator is mutually exclusive with cpu.tdp_per_unit
+      and accelerator.tdp_per_unit'
+    needs-cpu-accelerator-combined: '{label}: needs cpu and accelerator, or combined_cpu_accelerator'
+    declared-tdp-requires-switch: '{label}: declared_tdp requires switch_count'
+    scale-out-present-true-2: scale_out.present is true for a single-node submission; E.4 makes it false
+      there, and the switch power is counted against this node
+    scale-out-nics-counted: scale_out.nics.counted is true, but node power comes from a published specification,
+      which §4.5.2 assumes includes the adapters. Set counted to false, or evidence the exclusion in excluded_from_published_power
+    scale-out-nics-counted-2: scale_out.nics.counted is false, but node power is built with the MLC formula,
+      which has no NIC term — §4.5.2 says the NICs MUST be included
+    scale-out-required-bandwidth-2: scale_out.required_bandwidth_tbps is {required_bandwidth_tbps:g},
+      above the {from_nics:g} Tb/s the NICs carry ({nodes} nodes × {count_per_node} NICs × {bandwidth_per_nic_gbps:g}
+      Gb/s)
+    computed-overhead-fraction-cooling: computed.overhead_fraction is {overhead_fraction:g}, but cooling
+      {cooling!r} fixes it at {overhead_fraction_2:g}
+    computed-recomputed: computed.{name} is {theirs:g}, recomputed {value:g}
+power-estimated:
+  title: Estimated power
+  spec: §4.5.2
+  messages:
+    warn: 'MLC Estimated Power: {estimates} — Appendix D values reach provisioned_power_kw'
+region-basis:
+  title: Region boundaries (C_min)
+  spec: §5.4
+  messages:
+    warn: max_supported_concurrency could not be read from system_desc.json, so C_max is unknown and the
+      region-dependent checks were not run for this curve
+    fail: No point's concurrency could be read — C_min cannot be derived, so no region-dependent check
+      can run for this curve
+    warn-2: C_min = {c_min}{clamped} derived from {concurrencies_count} of {point_dir_count} points{note}
+      — the rest have no readable concurrency
+    pass: C_min = {c_min}{clamped} derived from all {point_dir_count} points{note}
+region-computation:
+  title: Region boundaries
+  spec: §5.5
+  messages:
+    fail: '{detail}'
+region-declared:
+  title: Region declared
+  spec: §8.3
+  messages:
+    pass: region='{region}'
+    fail: 'Invalid region ''{region}'': must be one of {valid_regions}'
+region-placement:
+  title: Region placement
+  spec: §8.3
+  messages:
+    warn: Declared region '{declared}' ≠ computed region '{computed}' for concurrency {concurrency}
+    pass: Declared region '{declared}' matches concurrency {concurrency}
+required-dir:
+  title: Required directories
+  spec: §1
+  messages:
+    pass: 'Found required directory: {name}/'
+    fail:
+      text: 'Missing required directory: {name}/{hint}'
+      fix: Create {name}/ at the submission root, laid out as §8.1 describes.
+result-summary-present:
+  title: Result summary present
+  spec: §1
+  messages:
+    fail:
+      text: 'Missing result_summary.json for r{concurrency}: {relative_to}'
+      fix: Add the point's result_summary.json, as the benchmark writes it.
+    fail-2:
+      text: 'Missing result_summary.json for {point_dir_name}: {relative_to}'
+      fix: Add the point's result_summary.json, as the benchmark writes it.
+seed-config-legacy:
+  title: Seed config legacy
+  spec: §4.6
+  messages:
+    fail: 'Point {concurrency}: {field_name} = {val!r}; v0.7 required 42 and v1.0 requires a declared
+      seed_set (§4.6) — neither is satisfied'
+    warn: 'Point {concurrency}: {field_name} = 42 with no seed_set declared; v1.0 binds seeds to a published
+      set (§4.6)'
+seed-runtime-match:
+  title: Seed runtime match
+  spec: §4.6
+  messages:
+    fail: 'runtime_settings.runtime does not match seed set {published_id!r}: {mismatched}'
+    pass: RNG seeds match seed set {published_id!r}
+    warn: runtime_settings.runtime uses the v0.7 seed names (scheduler_random_seed / dataloader_random_seed);
+      v1.0 names them scheduler_rng_seed / sample_index_rng_seed and adds model_seed
+seed-set-adoption:
+  title: Seed set adoption
+  spec: §4.6
+  messages:
+    pass: Seed set {published_id!r} was published for cohort {target}
+    fail: 'Seed set {published_id!r} was not published for cohort {target} (published for: {value})'
+    skipped: 'SKIPPED: the published seed-set registry carries no cohort keys, so the four-cohort adoption
+      window cannot be evaluated'
+    skipped-cohorts: 'SKIPPED: the published seed-set registry carries no cohort keys, so the four-cohort
+      adoption window cannot be evaluated (points target {cohorts})'
+seed-set-consistency:
+  title: Seed set consistency
+  spec: §4.6
+  messages:
+    fail: 'Points declare {declared_count} different seed sets: {declared} — a submission binds exactly
+      one'
+    pass: All points bind seed set {next!r}
+seed-set-membership:
+  title: Seed set membership
+  spec: §4.6
+  messages:
+    pass: seed_set {set_id!r} is a published set
+    fail: 'seed_set {set_id!r} is not a published set (known: {value})'
+seed-set-registry:
+  title: Seed-set registry
+  spec: §4.6
+  messages:
+    unavailable: '{detail}'
+shared-path-resolution:
+  title: Shared src/ and docs/ paths
+  spec: §9.1
+  messages:
+    fail:
+      text: '{field_name} {value!r} does not resolve to a directory under the submission root (paths must
+        be root-relative and free of ''..''); named by {where}'
+      fix: Point {field_name} at a directory under the submission root, written root-relative (for example
+        src or docs).
+    pass: '{field_name} {value!r} resolves to {relative_to}/ ({where})'
+src-dir:
+  title: Implementation sources (src/)
+  spec: §1
+  messages:
+    pass: 'src/ present with {impl_dirs_count} implementation director{value}: {impl_dirs}'
+    fail:
+      text: Missing src/ directory
+      fix: Add a src/ directory at the submission root with one directory per implementation (vllm/, sglang/,
+        …).
+    fail-2:
+      text: src/ contains no implementation directory
+      fix: Add one directory per implementation under src/ (vllm/, sglang/, …).
+src-readme:
+  title: Implementation README
+  spec: §1
+  messages:
+    pass: src/{impl_dir_name}/README.md present
+    fail:
+      text: Missing README.md in src/{impl_dir_name}/ (each implementation must document how to reproduce
+        a point)
+      fix: Add src/{impl_dir_name}/README.md explaining how to build the system under test and reproduce
+        a point.
+steady-state-basis:
+  title: Steady state basis
+  spec: §4.4
+  messages:
+    warn: 'Point {c}: no steady_state block; metrics are whole-run, which §4.4 makes the fallback rather
+      than the official basis'
+    pass: 'Point {c}: official result is the steady-state window ({value} super-passes)'
+    warn-2: 'Point {c}: status {status!r} — official result falls back to whole-run `total`; steady-state
+      numbers are low-confidence (§4.4)'
+    drifting: 'Point {c}: verdict {verdict!r} — a drifting gating metric is reported as a range or slope,
+      never as a point estimate'
+    drifting-metrics: 'Point {c}: verdict {verdict!r} — a drifting gating metric is reported as a range
+      or slope, never as a point estimate ({metrics})'
+steady-state-consistency:
+  title: Steady state consistency
+  spec: §4.4
+  messages:
+    pass: steady_state status {status!r} consistent with the reported window
+    fail: '{problems}'
+    status-windowable-over-super: status 'windowable' over {spans} super-pass(es); §4.4 needs ≥ {min_trend_n}
+      (MIN_TREND_N)
+    status-windowable-drifting-gating: 'status ''windowable'' with drifting gating metric(s): {drifting};
+      §4.4 requires every one to be a Plateau'
+    status-insufficient-passes-over: status 'insufficient_passes' over {spans} super-pass(es), which meets
+      the ≥ {min_trend_n} floor
+steady-state-valid:
+  title: Steady state valid
+  spec: §4.4
+  messages:
+    pass: steady_state status={status!r} verdict={verdict!r}
+    fail: '{problems}'
+    status-expected-one: status {status!r} (expected one of {steady_state_statuses})
+    verdict-expected-one: verdict {verdict!r} (expected one of {steady_state_verdicts})
+    state-expected-one: state[{metric}] {state!r} (expected one of {gating_states})
+streaming-config:
+  title: Streaming config
+  spec: §6.5
+  messages:
+    pass: 'Point {concurrency}: stream_all_chunks={stream_all_chunks} controls client IPC forwarding;
+      server streaming cannot be verified from this flag'
+system-description-consistency:
+  title: System description consistency
+  spec: §8.5
+  messages:
+    pass: '{present_count} point(s) agree on the system description'
+    fail:
+      text: 'system_desc.json differs from {ref_path_parent_name}/ in: {differing} — every point of a
+        curve must describe the same system'
+      fix: Make every point's system_desc.json describe the same system; only the per-point fields (parallelism,
+        batch, tps_utilization, config summary) may differ.
+system-description-present:
+  title: System description present
+  spec: §8.2
+  messages:
+    fail:
+      text: No readable system_desc.json under {rel}/
+      fix: Add a system_desc.json (§8.2) to every point directory of the curve.
+    fail-2:
+      text: Missing system_desc.json in {rel}/{point_dir_name}/
+      fix: Add the system_desc.json (§8.2) for this point.
+system-description-valid:
+  title: System description (system_desc.json)
+  spec: §8.2
+  messages:
+    pass: System description valid for {rel}
+    fail: system_desc.json is not readable as a JSON object
+system-results-dir:
+  title: System results directory
+  spec: §1
+  messages:
+    fail:
+      text: No results/<system>/ directories found
+      fix: Put each system's results under results/<system>/<benchmark_model>/r<N>/.
+target-cohort:
+  title: Target cohort
+  spec: §4.6
+  messages:
+    pass: target_cohort='{target_cohort}'
+    fail: target_cohort '{target_cohort}' is not of the form YYYY-MM-C0/C1
+tps-utilization:
+  title: TPS utilization
+  spec: §8.2
+  messages:
+    pass: tps_utilization {util:.4f} matches expected {expected:.4f}
+    fail:
+      text: tps_utilization {util} != expected {expected:.4f} (system_tps {tps:.4f} / curve max {max_tps:.4f}
+        for {curve}; abs tol {tps_utilization_abs_tol})
+      fix: 'Set tps_utilization in system_desc.json to {expected:.4f}: this point''s system_tps over the
+        curve''s highest.'
+ultra-low-concurrency-coverage:
+  title: Ultra Low Concurrency coverage
+  spec: §5.4
+  messages:
+    pass: 'Ultra Low Concurrency covered: {ultra_low} (≤ {ultra_low_concurrency_max})'
+    fail:
+      text: No point at concurrency ≤ {ultra_low_concurrency_max} ({detail})
+      fix: Add a point at concurrency {ultra_low_concurrency_max} or below.
+warmup-logs-retained:
+  title: Warmup logs retained
+  spec: §6.3.2
+  messages:
+    pass: 'Point {concurrency}: no warmup requests; no warmup request logs required'
+    warn: 'Point {concurrency}: warmup logs declared NOT retained; §6.3.2 requires them to remain available
+      for reviewer inspection'
+    warn-2: 'Point {concurrency}: warmup block does not declare logs_retained, so §6.3.2 log retention
+      cannot be confirmed'
+    retained: 'Point {concurrency}: warmup logs declared retained'
+    retained-link: 'Point {concurrency}: warmup logs declared retained ({link})'
+warmup-present:
+  title: Warmup present
+  spec: §6.3.3
+  messages:
+    fail: 'Point {concurrency}: missing warmup declaration (§6.3.3)'
+    pass: 'Point {concurrency}: warmup declaration present'
+warmup-salt:
+  title: Warmup salt
+  spec: §6.3.3
+  messages:
+    warn: 'Point {concurrency}: warmup salt is enabled'

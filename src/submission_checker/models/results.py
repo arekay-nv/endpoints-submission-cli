@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from ..messages import render
+
 __all__ = ["CheckResult", "Report", "Severity", "err", "ok", "warn"]
 
 
@@ -21,11 +23,18 @@ class Severity(str, Enum):
 class CheckResult(BaseModel):
     """Result of a single automated check.
 
+    The wording comes from the message catalog (``data/messages.yaml``); build
+    results with :func:`ok`, :func:`warn` and :func:`err` rather than by hand.
+
     Attributes:
         rule: Short identifier matching a §9.1 check name.
+        key: Which of the rule's catalog messages this is.
+        title: The rule's human-readable title, from the catalog.
         message: Human-readable description of the finding.
+        fix: What the submitter should do about it, where the catalog says.
         severity: How critical the finding is.
         path: File or directory the finding applies to, if any.
+        spec_ref: The spec section the rule enforces, e.g. ``§5.4``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -35,6 +44,9 @@ class CheckResult(BaseModel):
     severity: Severity = Severity.ERROR
     path: Path | None = None
     spec_ref: str = ""
+    key: str = ""
+    title: str = ""
+    fix: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -43,25 +55,35 @@ class CheckResult(BaseModel):
         return self.severity != Severity.ERROR
 
 
-def ok(rule: str, message: str, path: Path | None = None, spec_ref: str = "") -> CheckResult:
-    """Return an INFO-severity :class:`CheckResult` — the check passed."""
+def _result(
+    severity: Severity, rule: str, key: str, path: Path | None, params: dict[str, object]
+) -> CheckResult:
+    rendered = render(rule, key, params)
     return CheckResult(
-        rule=rule, message=message, severity=Severity.INFO, path=path, spec_ref=spec_ref
+        rule=rule,
+        key=key,
+        title=rendered.title,
+        message=rendered.text,
+        fix=rendered.fix,
+        severity=severity,
+        path=path,
+        spec_ref=rendered.spec,
     )
 
 
-def warn(rule: str, message: str, path: Path | None = None, spec_ref: str = "") -> CheckResult:
-    """Return a WARNING-severity :class:`CheckResult` — notable but not a hard failure."""
-    return CheckResult(
-        rule=rule, message=message, severity=Severity.WARNING, path=path, spec_ref=spec_ref
-    )
+def ok(rule: str, key: str, path: Path | None = None, /, **params: object) -> CheckResult:
+    """An INFO result — the check passed. *key* names the catalog message."""
+    return _result(Severity.INFO, rule, key, path, params)
 
 
-def err(rule: str, message: str, path: Path | None = None, spec_ref: str = "") -> CheckResult:
-    """Return an ERROR-severity :class:`CheckResult` — the check failed."""
-    return CheckResult(
-        rule=rule, message=message, severity=Severity.ERROR, path=path, spec_ref=spec_ref
-    )
+def warn(rule: str, key: str, path: Path | None = None, /, **params: object) -> CheckResult:
+    """A WARNING result — notable but not a hard failure."""
+    return _result(Severity.WARNING, rule, key, path, params)
+
+
+def err(rule: str, key: str, path: Path | None = None, /, **params: object) -> CheckResult:
+    """An ERROR result — the check failed."""
+    return _result(Severity.ERROR, rule, key, path, params)
 
 
 class Report(BaseModel):

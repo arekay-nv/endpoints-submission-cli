@@ -48,10 +48,9 @@ class RegionPlacement(BaseModel):
             self._check_results.append(
                 ok(
                     "concurrency-in-range",
-                    f"Dedicated Offline run: concurrency {self.config.concurrency} is the"
-                    " dataset cardinality (§5.7.1), exempt from the region range",
+                    "pass",
                     self.yaml_path,
-                    "#5.7.1",
+                    concurrency=self.config.concurrency,
                 )
             )
             return self
@@ -61,19 +60,20 @@ class RegionPlacement(BaseModel):
             self._check_results.append(
                 err(
                     "concurrency-in-range",
-                    f"Concurrency {concurrency} exceeds the maximum valid range "
-                    f"(including the 10% margin: {self.regions.margin.end})",
+                    "fail",
                     self.yaml_path,
-                    "#9",
+                    concurrency=concurrency,
+                    end=self.regions.margin.end,
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "concurrency-in-range",
-                    f"Concurrency {concurrency} valid ({region})",
+                    "pass-2",
                     self.yaml_path,
-                    "#9",
+                    concurrency=concurrency,
+                    region=region,
                 )
             )
         return self
@@ -91,19 +91,21 @@ class RegionPlacement(BaseModel):
             self._check_results.append(
                 warn(
                     "region-placement",
-                    f"Declared region '{declared}' ≠ computed region '{computed}' for "
-                    f"concurrency {self.config.concurrency}",
+                    "warn",
                     self.yaml_path,
-                    "#8.3",
+                    declared=declared,
+                    computed=computed,
+                    concurrency=self.config.concurrency,
                 )
             )
         else:
             self._check_results.append(
                 ok(
                     "region-placement",
-                    f"Declared region '{declared}' matches concurrency {self.config.concurrency}",
+                    "pass",
                     self.yaml_path,
-                    "#8.3",
+                    declared=declared,
+                    concurrency=self.config.concurrency,
                 )
             )
         return self

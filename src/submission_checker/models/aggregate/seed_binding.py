@@ -19,8 +19,6 @@ from ..results import CheckResult, err, ok, warn
 
 __all__ = ["SeedBinding"]
 
-_SPEC_REF = "#4.6"
-
 
 class SeedBinding(BaseModel):
     """Validates one curve's seed declarations against the published seed sets."""
@@ -53,20 +51,15 @@ class SeedBinding(BaseModel):
             self._check_results.append(
                 err(
                     "seed-set-consistency",
-                    f"Points declare {len(declared)} different seed sets:"
-                    f" {', '.join(sorted(declared))} — a submission binds exactly one",
+                    "fail",
                     self.model_dir,
-                    _SPEC_REF,
+                    declared_count=len(declared),
+                    declared=", ".join(sorted(declared)),
                 )
             )
         else:
             self._check_results.append(
-                ok(
-                    "seed-set-consistency",
-                    f"All points bind seed set {next(iter(declared))!r}",
-                    self.model_dir,
-                    _SPEC_REF,
-                )
+                ok("seed-set-consistency", "pass", self.model_dir, next=next(iter(declared)))
             )
         return self
 
@@ -79,21 +72,16 @@ class SeedBinding(BaseModel):
                 continue
             if set_id in self.registry:
                 self._check_results.append(
-                    ok(
-                        "seed-set-membership",
-                        f"seed_set {set_id!r} is a published set",
-                        yaml_path,
-                        _SPEC_REF,
-                    )
+                    ok("seed-set-membership", "pass", yaml_path, set_id=set_id)
                 )
             else:
                 self._check_results.append(
                     err(
                         "seed-set-membership",
-                        f"seed_set {set_id!r} is not a published set"
-                        f" (known: {', '.join(sorted(self.registry)) or 'none'})",
+                        "fail",
                         yaml_path,
-                        _SPEC_REF,
+                        set_id=set_id,
+                        value=", ".join(sorted(self.registry)) or "none",
                     )
                 )
         return self
@@ -115,32 +103,18 @@ class SeedBinding(BaseModel):
                 self._check_results.append(
                     err(
                         "seed-runtime-match",
-                        f"runtime_settings.runtime does not match seed set {published.id!r}:"
-                        f" {'; '.join(mismatched)}",
+                        "fail",
                         yaml_path,
-                        _SPEC_REF,
+                        published_id=published.id,
+                        mismatched="; ".join(mismatched),
                     )
                 )
             else:
                 self._check_results.append(
-                    ok(
-                        "seed-runtime-match",
-                        f"RNG seeds match seed set {published.id!r}",
-                        yaml_path,
-                        _SPEC_REF,
-                    )
+                    ok("seed-runtime-match", "pass", yaml_path, published_id=published.id)
                 )
             if runtime.uses_legacy_names:
-                self._check_results.append(
-                    warn(
-                        "seed-runtime-match",
-                        "runtime_settings.runtime uses the v0.7 seed names"
-                        " (scheduler_random_seed / dataloader_random_seed); v1.0 names them"
-                        " scheduler_rng_seed / sample_index_rng_seed and adds model_seed",
-                        yaml_path,
-                        _SPEC_REF,
-                    )
-                )
+                self._check_results.append(warn("seed-runtime-match", "warn", yaml_path))
         return self
 
     @model_validator(mode="after")
@@ -160,11 +134,9 @@ class SeedBinding(BaseModel):
             self._check_results.append(
                 ok(
                     "seed-set-adoption",
-                    "SKIPPED: the published seed-set registry carries no cohort keys, so §4.6's"
-                    " four-cohort adoption window cannot be evaluated"
-                    + (f" (points target {', '.join(sorted(cohorts))})" if cohorts else ""),
+                    "skipped-cohorts" if cohorts else "skipped",
                     self.model_dir,
-                    _SPEC_REF,
+                    cohorts=", ".join(sorted(cohorts)),
                 )
             )
             return self
@@ -178,19 +150,21 @@ class SeedBinding(BaseModel):
                 self._check_results.append(
                     ok(
                         "seed-set-adoption",
-                        f"Seed set {published.id!r} was published for cohort {target}",
+                        "pass",
                         yaml_path,
-                        _SPEC_REF,
+                        published_id=published.id,
+                        target=target,
                     )
                 )
             else:
                 self._check_results.append(
                     err(
                         "seed-set-adoption",
-                        f"Seed set {published.id!r} was not published for cohort {target}"
-                        f" (published for: {', '.join(published.cohorts) or 'no cohort'})",
+                        "fail",
                         yaml_path,
-                        _SPEC_REF,
+                        published_id=published.id,
+                        target=target,
+                        value=", ".join(published.cohorts) or "no cohort",
                     )
                 )
         return self

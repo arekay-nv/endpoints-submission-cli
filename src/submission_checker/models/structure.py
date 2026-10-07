@@ -35,13 +35,9 @@ class SubmissionDir(BaseModel):
         for name in (layout.RESULTS_DIR, layout.DOCS_DIR):
             path = self.root / name
             if path.is_dir():
-                self._check_results.append(
-                    ok("required-dir", f"Found required directory: {name}/", path, "#1")
-                )
+                self._check_results.append(ok("required-dir", "pass", path, name=name))
             else:
-                self._check_results.append(
-                    err("required-dir", f"Missing required directory: {name}/{hint}", path, "#1")
-                )
+                self._check_results.append(err("required-dir", "fail", path, name=name, hint=hint))
         return self
 
     def _legacy_layout_hint(self) -> str:
@@ -81,36 +77,22 @@ class SrcDir(BaseModel):
     def _check_src(self) -> SrcDir:
         src_dir = self.root / layout.SRC_DIR
         if not src_dir.is_dir():
-            self._check_results.append(
-                err(
-                    "src-dir",
-                    "Missing src/ directory",
-                    src_dir,
-                    "#1",
-                )
-            )
+            self._check_results.append(err("src-dir", "fail", src_dir))
             return self
 
         impl_dirs = [d for d in sorted(src_dir.iterdir()) if d.is_dir()]
         if not impl_dirs:
-            self._check_results.append(
-                err(
-                    "src-dir",
-                    "src/ contains no implementation directory",
-                    src_dir,
-                    "#1",
-                )
-            )
+            self._check_results.append(err("src-dir", "fail-2", src_dir))
             return self
 
         self._check_results.append(
             ok(
                 "src-dir",
-                f"src/ present with {len(impl_dirs)} implementation "
-                f"director{'y' if len(impl_dirs) == 1 else 'ies'}: "
-                f"{', '.join(d.name for d in impl_dirs)}",
+                "pass",
                 src_dir,
-                "#1",
+                impl_dirs_count=len(impl_dirs),
+                value="y" if len(impl_dirs) == 1 else "ies",
+                impl_dirs=", ".join(d.name for d in impl_dirs),
             )
         )
 
@@ -121,17 +103,11 @@ class SrcDir(BaseModel):
             )
             if readme is not None:
                 self._check_results.append(
-                    ok("src-readme", f"src/{impl_dir.name}/README.md present", readme, "#1")
+                    ok("src-readme", "pass", readme, impl_dir_name=impl_dir.name)
                 )
             else:
                 self._check_results.append(
-                    err(
-                        "src-readme",
-                        f"Missing README.md in src/{impl_dir.name}/ "
-                        "(each implementation must document how to reproduce a point)",
-                        impl_dir / "README.md",
-                        "#1",
-                    )
+                    err("src-readme", "fail", impl_dir / "README.md", impl_dir_name=impl_dir.name)
                 )
         return self
 
@@ -155,29 +131,21 @@ class ModelDir(BaseModel):
     def _check_point_dirs(self) -> ModelDir:
         rel = f"results/{self.system_id}/{self.benchmark_model}"
         if not self.root.is_dir():
-            self._check_results.append(
-                err("point-dirs", f"Missing benchmark-model directory: {rel}/", self.root, "#1")
-            )
+            self._check_results.append(err("point-dirs", "fail", self.root, rel=rel))
             return self
         dirs = self.point_dirs
         if dirs:
             self._check_results.append(
                 ok(
                     "point-dirs",
-                    f"Found {len(dirs)} Pareto point director"
-                    f"{'y' if len(dirs) == 1 else 'ies'} in {rel}/: "
-                    f"{', '.join(d.name for d in dirs)}",
+                    "pass",
                     self.root,
-                    "#1",
+                    dirs_count=len(dirs),
+                    value="y" if len(dirs) == 1 else "ies",
+                    rel=rel,
+                    dirs=", ".join(d.name for d in dirs),
                 )
             )
         else:
-            self._check_results.append(
-                err(
-                    "point-dirs",
-                    f"No r<N>/ Pareto point directories in {rel}/",
-                    self.root,
-                    "#1",
-                )
-            )
+            self._check_results.append(err("point-dirs", "fail-2", self.root, rel=rel))
         return self
