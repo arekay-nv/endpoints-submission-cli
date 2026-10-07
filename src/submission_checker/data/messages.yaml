@@ -108,8 +108,9 @@ agentic-metric-consistency:
   spec: §4.1
   messages:
     pass: e2e_avg_interactivity={derived:.4f} tok/s across completed turns
-    fail: e2e_avg_interactivity {stored!r} is reported, but the summary states no output_tokens_per_turn_total
-      / e2e_turn_time_seconds_total to derive it from (§4.1)
+    fail: e2e_avg_interactivity {stored!r} is reported, but the summary states neither output_tokens_per_turn_total
+      / e2e_turn_time_seconds_total nor a failure-free output_sequence_lengths.total / latency.total to derive
+      it from (§4.1)
     fail-2: stored e2e_avg_interactivity {stored:.4f} ≠ derived {derived:.4f} (rel err {rel_err:.1%})
 agentic-osl-range:
   title: Agentic OSL range

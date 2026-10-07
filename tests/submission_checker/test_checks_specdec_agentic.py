@@ -266,3 +266,59 @@ class TestAgenticMetrics:
             e2e_turn_time_seconds_total=0.0,
         )
         assert summary.e2e_avg_interactivity is None
+
+    # The reference client writes the same two sums under its own names,
+    # output_sequence_lengths.total (tokens) and latency.total (ns), and leaves
+    # e2e_avg_interactivity out when any sample failed (endpoints metrics/report.py).
+
+    def test_derived_from_the_clients_token_and_latency_totals(self) -> None:
+        summary = PointSummary(
+            n_samples_completed=1,
+            duration_ns=1.0,
+            output_sequence_lengths={"total": 6000.0},
+            latency={"total": 120_000_000_000.0},
+        )
+        assert summary.e2e_avg_interactivity == pytest.approx(50.0)
+
+    def test_client_report_with_its_own_value_passes(self, tmp_path: Path) -> None:
+        """A measured client report: 30,048,888 tokens over 65,037.28 s of turn latency."""
+        result = self._result(
+            tmp_path,
+            output_sequence_lengths={"total": 30048888},
+            latency={"total": 65037277147776},
+            e2e_avg_interactivity=462.02561542857495,
+        )
+        hits = self._hits(result)
+        assert hits and all(r.severity == Severity.INFO for r in hits)
+
+    def test_client_report_with_a_wrong_value_errors(self, tmp_path: Path) -> None:
+        result = self._result(
+            tmp_path,
+            output_sequence_lengths={"total": 6000.0},
+            latency={"total": 120_000_000_000.0},
+            e2e_avg_interactivity=999.0,
+        )
+        errors = [r for r in self._hits(result) if r.severity == Severity.ERROR]
+        assert [r.key for r in errors] == ["fail-2"]  # a mismatch, not missing inputs
+
+    def test_client_totals_are_not_paired_when_a_sample_failed(self) -> None:
+        """Tokens cover successful turns only and latency every terminal one."""
+        totals = {
+            "n_samples_completed": 1,
+            "duration_ns": 1.0,
+            "output_sequence_lengths": {"total": 6000.0},
+            "latency": {"total": 120_000_000_000.0},
+        }
+        assert PointSummary(**totals).e2e_avg_interactivity == pytest.approx(50.0)
+        assert PointSummary(**totals, n_samples_failed=1).e2e_avg_interactivity is None
+
+    def test_the_named_sums_take_precedence_over_the_client_totals(self) -> None:
+        summary = PointSummary(
+            n_samples_completed=1,
+            duration_ns=1.0,
+            output_tokens_per_turn_total=6000.0,
+            e2e_turn_time_seconds_total=120.0,
+            output_sequence_lengths={"total": 1.0},
+            latency={"total": 1_000_000_000.0},
+        )
+        assert summary.e2e_avg_interactivity == pytest.approx(50.0)
