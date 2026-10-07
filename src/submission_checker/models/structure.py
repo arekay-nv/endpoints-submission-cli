@@ -31,6 +31,7 @@ class SubmissionDir(BaseModel):
 
     @model_validator(mode="after")
     def _check_required_dirs(self) -> SubmissionDir:
+        hint = self._legacy_layout_hint()
         for name in (layout.RESULTS_DIR, layout.DOCS_DIR):
             path = self.root / name
             if path.is_dir():
@@ -39,9 +40,25 @@ class SubmissionDir(BaseModel):
                 )
             else:
                 self._check_results.append(
-                    err("required-dir", f"Missing required directory: {name}/", path, "#1")
+                    err("required-dir", f"Missing required directory: {name}/{hint}", path, "#1")
                 )
         return self
+
+    def _legacy_layout_hint(self) -> str:
+        """Name the v0.7 layout when that is what the submission uses.
+
+        v0.7 kept results under ``pareto/`` and documentation under
+        ``documentation/``; v1.0 (§8.1) renamed both. Without this, a v0.7-shaped
+        submission reads as two unrelated missing directories.
+        """
+        legacy = [name for name in ("pareto", "documentation") if (self.root / name).is_dir()]
+        if not legacy:
+            return ""
+        found = ", ".join(f"{name}/" for name in legacy)
+        return (
+            f" (found {found}: this looks like the v0.7 layout; v1.0 uses"
+            " results/<system>/<benchmark_model>/r<N>/ and docs/ — see §8.1)"
+        )
 
 
 class SrcDir(BaseModel):
