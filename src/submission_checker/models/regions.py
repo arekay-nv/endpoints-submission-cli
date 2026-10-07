@@ -20,6 +20,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from ..messages import Invalid
+
 __all__ = [
     "MARGIN_SATISFIES_HIGH_CONCURRENCY",
     "MIN_DURATION_MS",
@@ -118,7 +120,7 @@ def compute_regions(c_max: int, c_min: int) -> Regions:
         A :class:`Regions` instance with inclusive ``[start, end]`` boundaries.
 
     Raises:
-        ValueError: If *c_max* is not greater than 32, or *c_min* is outside 1–32.
+        Invalid: If *c_max* is not greater than 32, or *c_min* is outside 1–32.
 
     Example::
 
@@ -126,13 +128,12 @@ def compute_regions(c_max: int, c_min: int) -> Regions:
         print(regions.low_concurrency)  # 17–26
     """
     if not 1 <= c_min <= ULTRA_LOW_CONCURRENCY_MAX:
-        raise ValueError(
-            f"Minimum concurrency must be between 1 and {ULTRA_LOW_CONCURRENCY_MAX} "
-            f"(inclusive), got {c_min}"
+        raise Invalid(
+            "region-computation", "c-min-range", limit=ULTRA_LOW_CONCURRENCY_MAX, c_min=c_min
         )
     if c_max <= ULTRA_LOW_CONCURRENCY_MAX:
-        raise ValueError(
-            f"Maximum Supported Concurrency must be > {ULTRA_LOW_CONCURRENCY_MAX}, got {c_max}"
+        raise Invalid(
+            "region-computation", "c-max-too-low", limit=ULTRA_LOW_CONCURRENCY_MAX, c_max=c_max
         )
 
     interval = math.log2(c_max - c_min) / 3

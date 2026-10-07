@@ -11,6 +11,7 @@ import yaml
 
 from submission_checker import layout
 from submission_checker.checker import SubmissionChecker
+from submission_checker.messages import Invalid
 from submission_checker.models import CheckResult, Report, Severity
 
 from .conftest import TEST_SUBMISSIONS
@@ -623,16 +624,17 @@ class TestCheckerEdgeCases:
         assert _errors(report, "point-config-valid")
 
     def test_region_computation_error(self, tmp_path):
-        """region-computation error when compute_regions raises ValueError."""
+        """region-computation error when compute_regions raises Invalid."""
         # compute_regions only raises if M <= 32, but SystemDescription enforces M > 32.
-        # Patch compute_regions to simulate an unexpected ValueError.
+        # Patch compute_regions to simulate the error.
         root = _build_submission(tmp_path)
         with patch(
             "submission_checker.checker.compute_regions",
-            side_effect=ValueError("C_max must be > 32"),
+            side_effect=Invalid("region-computation", "c-max-too-low", limit=32, c_max=16),
         ):
             report = _check(root)
-        assert _errors(report, "region-computation")
+        [error] = _errors(report, "region-computation")
+        assert error.message == "Maximum Supported Concurrency must be greater than 32, got 16"
 
     def test_model_name_matches_dir(self, tmp_path):
         """ok when point.yaml's model_name matches the model directory name."""

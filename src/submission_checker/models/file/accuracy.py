@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import PrivateAttr, RootModel, model_validator
 
+from ...messages import Invalid
 from ..results import CheckResult, err
 
 __all__ = ["AccuracyResult"]
@@ -38,20 +39,20 @@ class AccuracyResult(RootModel[dict[str, dict[str, Any]]]):
         if isinstance(data, dict) and "accuracy_scores" in data:
             data = data["accuracy_scores"]
             if not isinstance(data, (dict, list)):
-                raise ValueError("accuracy_scores must be a dataset mapping or list")
+                raise Invalid("accuracy-valid", "scores-not-collection")
         if not isinstance(data, list):
             return data
         indexed: dict[str, dict[str, Any]] = {}
         for entry in data:
             if not isinstance(entry, dict):
-                raise ValueError("Each accuracy_scores entry must be a dictionary")
+                raise Invalid("accuracy-valid", "entry-not-mapping")
             name = entry.get("dataset_name")
             if not isinstance(name, str) or not name.strip():
-                raise ValueError("Each accuracy_scores entry must have a non-empty dataset_name")
+                raise Invalid("accuracy-valid", "entry-unnamed")
             if name in indexed:
-                raise ValueError(f"Duplicate accuracy dataset_name: {name!r}")
+                raise Invalid("accuracy-valid", "dataset-duplicate", name=name)
             if "score" not in entry:
-                raise ValueError(f"Native accuracy entry {name!r} is missing score")
+                raise Invalid("accuracy-valid", "score-missing", name=name)
             normalized = dict(entry)
             # Native scorers name these fields differently. Keep the originals
             # and expose aliases used by the existing sample-count/weight gates.
@@ -61,7 +62,13 @@ class AccuracyResult(RootModel[dict[str, dict[str, Any]]]):
             ):
                 if native in entry:
                     if canonical in entry and entry[canonical] != entry[native]:
-                        raise ValueError(f"Conflicting {native} and {canonical} for {name!r}")
+                        raise Invalid(
+                            "accuracy-valid",
+                            "alias-conflict",
+                            name=name,
+                            native=native,
+                            canonical=canonical,
+                        )
                     normalized[canonical] = entry[native]
             indexed[name] = normalized
         return indexed

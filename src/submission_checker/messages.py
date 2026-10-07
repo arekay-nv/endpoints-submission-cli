@@ -23,6 +23,13 @@ rather than overridable at run time.
 Templates use :meth:`str.format` syntax restricted to plain names: ``{model}``,
 ``{value!r}`` and ``{ratio:.2f}`` work, ``{point.name}`` and ``{scores[0]}`` do not.
 The code formats anything richer before passing it in.
+
+Validation inside the file models words its findings the same way. A validator
+raises :class:`Invalid` with a rule, a key and values rather than a hand-written
+``ValueError``; the loaders render it from the catalog, located at the field that
+failed. Pydantic's own errors ("Field required", "Input should be a valid
+integer") are worded by the :data:`PYDANTIC` section, keyed by Pydantic's error
+type, so a library upgrade cannot change what a submitter reads.
 """
 
 from __future__ import annotations
@@ -37,6 +44,9 @@ from typing import Any
 import yaml
 
 __all__ = [
+    "PYDANTIC",
+    "SHARED",
+    "Invalid",
     "MessageCatalogError",
     "Rendered",
     "catalog",
@@ -52,6 +62,11 @@ _BUNDLED = Path(__file__).parent / "data" / "messages.yaml"
 #: field-level errors every file loader reports under its own rule.
 SHARED = "_shared"
 
+#: Section of the catalog wording Pydantic's built-in validation errors, keyed by
+#: Pydantic's error type (``missing``, ``int_parsing``, ...). Its templates can use
+#: the error's context values and ``input``, the offending value.
+PYDANTIC = "_pydantic"
+
 #: When True, a missing key, a missing parameter or a template error raises
 #: instead of degrading to a generic message. The test suite turns this on, so a
 #: message that cannot render is a failing test rather than a quiet fallback.
@@ -60,6 +75,22 @@ strict = False
 
 class MessageCatalogError(RuntimeError):
     """The catalog is malformed, or a result names a message it does not hold."""
+
+
+class Invalid(ValueError):
+    """A finding raised rather than returned, worded by the catalog.
+
+    File-model validators raise it where they would raise ``ValueError``: Pydantic
+    carries it through to the loader, which reports it under the field that failed.
+    Code outside a model, such as the region computation, raises it for its caller
+    to report. ``str()`` of it is the rendered message.
+    """
+
+    def __init__(self, rule: str, key: str, /, **params: object) -> None:
+        self.rule = rule
+        self.key = key
+        self.params = params
+        super().__init__(render(rule, key, params).text)
 
 
 @dataclass(frozen=True)

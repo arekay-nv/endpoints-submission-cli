@@ -45,7 +45,7 @@ def test_load_system_description_schema_error(tmp_path):
     assert model is None
     assert all(r.severity == Severity.ERROR for r in results)
     assert len(results) > 1  # all missing fields reported, not just the first
-    assert any("Validation error" in r.message for r in results)
+    assert any(r.message.endswith("required, but missing") for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ def test_load_point_config_schema_error(tmp_path):
     assert model is None
     assert len(results) >= 1
     assert all(r.severity == Severity.ERROR for r in results)
-    assert all("Validation error" in r.message for r in results)
+    assert "bad.yaml, field `concurrency`: required, but missing" in [r.message for r in results]
 
 
 def test_load_point_config_valid_returns_check_results(tmp_path):
@@ -143,7 +143,7 @@ def test_load_result_summary_schema_error(tmp_path):
     assert model is None
     assert len(results) >= 1
     assert all(r.severity == Severity.ERROR for r in results)
-    assert any("Validation error" in r.message for r in results)
+    assert any(r.message.startswith("bad.json, field `") for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ def test_load_accuracy_result_schema_error(tmp_path):
     assert model is None
     assert len(results) >= 1
     assert all(r.severity == Severity.ERROR for r in results)
-    assert any("Validation error" in r.message for r in results)
+    assert any(r.message.startswith("bad.json, field `cnn_dailymail") for r in results)
 
 
 # ---------------------------------------------------------------------------

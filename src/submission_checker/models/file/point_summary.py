@@ -6,6 +6,8 @@ import math
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
+from ...messages import Invalid
+
 __all__ = ["PercentileStats", "PointSummary"]
 
 
@@ -28,12 +30,15 @@ class PercentileStats(BaseModel):
         """Treat native decimal keys and integer keys as the same percentile."""
         normalized: dict[str, float] = {}
         for key, value in values.items():
-            percentile = float(key)
+            try:
+                percentile = float(key)
+            except ValueError:
+                percentile = math.nan
             if not math.isfinite(percentile) or not 0 <= percentile <= 100:
-                raise ValueError(f"Invalid percentile key: {key!r}")
+                raise Invalid("result-file-valid", "percentile-key", key=key)
             canonical = str(int(percentile)) if percentile.is_integer() else str(percentile)
             if canonical in normalized and normalized[canonical] != value:
-                raise ValueError(f"Conflicting values for percentile {canonical}")
+                raise Invalid("result-file-valid", "percentile-conflict", percentile=canonical)
             normalized[canonical] = value
         return normalized
 
