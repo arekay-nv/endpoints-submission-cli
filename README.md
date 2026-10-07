@@ -464,9 +464,12 @@ declare to match. A benchmark with no entry has no approved drafter, so speculat
 decoding stays disallowed for it (§2.9.4). Point `--approved-drafters FILE` or
 `$MLPERF_ENDPOINTS_APPROVED_DRAFTERS` at a newer published list.
 
-All six initial drafter approvals are recorded against `2026-10-C1`, matching the
-published seed-set cohort. The two-cohort approval lead time makes their earliest
-eligible target cohort `2026-11-C1`.
+All six initial drafter approvals are recorded against `2026-09-C1`: the reference
+README published them on 2026-09-10 (endpoints#494) and 2026-09-30 (endpoints#519), before
+the `2026-10-C0` publication, and §2.9.4 records an approval against the cohort in which the
+list is published. (Counted from the next publication date instead, the DeepSeek-V4.1-Flash
+entry would be `2026-10-C0`.) The two-cohort approval lead time makes their earliest eligible
+target cohort `2026-10-C1`.
 Approval cohorts are recorded per drafter, so future additions can carry later
 cohorts in the same registry.
 

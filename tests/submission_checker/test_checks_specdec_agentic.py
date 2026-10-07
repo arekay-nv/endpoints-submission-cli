@@ -98,13 +98,17 @@ class TestDrafterList:
             for benchmark, heads in self._REFERENCE_HEADS.items()
         }
 
-    def test_bundled_heads_record_the_initial_2026_10_c1_cohort(self) -> None:
-        """Initial approvals use the cohort published alongside the seed sets."""
+    def test_bundled_heads_record_the_2026_09_c1_cohort(self) -> None:
+        """The README published every head before the 2026-10-C0 publication.
+
+        Qwen and Kimi on 2026-09-10 (endpoints#494), DeepSeek-V4.1-Flash on 2026-09-30
+        (endpoints#519): no earlier than each entry's own publication cohort.
+        """
         cohorts = {
             d.model_id: d.approved_cohort for ds in load_approved_drafters().values() for d in ds
         }
         assert cohorts == {
-            model_id: "2026-10-C1"
+            model_id: "2026-09-C1"
             for heads in self._REFERENCE_HEADS.values()
             for model_id in heads
         }
@@ -112,9 +116,9 @@ class TestDrafterList:
     @pytest.mark.parametrize(
         ("target_cohort", "expected_severity"),
         [
-            ("2026-10-C1", Severity.ERROR),
-            ("2026-11-C0", Severity.ERROR),
-            ("2026-11-C1", Severity.INFO),
+            ("2026-09-C1", Severity.ERROR),
+            ("2026-10-C0", Severity.ERROR),
+            ("2026-10-C1", Severity.INFO),
         ],
     )
     def test_bundled_heads_respect_their_approval_lead_time(

@@ -32,38 +32,43 @@
 #   `git-sha1:<revision>`. A revision is the git commit of the model repository; its
 #   tree pins every weight file's SHA-256 through the LFS pointers, so it identifies
 #   the published weights exactly.
-# - These initial entries are recorded against 2026-10-C1, matching the published
-#   cohort in seed_sets.yaml. The two-cohort approval lead time therefore makes
-#   them eligible starting with target cohort 2026-11-C1.
+# - These initial entries are recorded against 2026-09-C1. §2.9.4 records an approval
+#   against the cohort in which the updated list is published. The README published the
+#   Qwen and Kimi heads on 2026-09-10 (endpoints#494), after the 2026-09-02 C0
+#   publication, and the DeepSeek-V4.1-Flash head on 2026-09-30 (endpoints#519), after the
+#   2026-09-16 C1 one; 2026-09-C1 is the cohort window by which both were published.
+#   Counted instead from the next publication date, the DeepSeek-V4.1-Flash entry would be
+#   2026-10-C0. The two-cohort approval lead time makes these entries eligible starting
+#   with target cohort 2026-10-C1.
 #   Future entries record their own approval cohorts alongside these entries.
 
 drafters:
   # Kimi K3: separately published DSpark heads (endpoints#494).
   - benchmark: kimi-k3
-    approved_cohort: 2026-10-C1
+    approved_cohort: 2026-09-C1
     model_id: RadixArk/Kimi-K3-DSpark
     weight_checksum: git-sha1:3c5bac301d9cf392706189d82ed947feca6c2f0f
   - benchmark: kimi-k3
-    approved_cohort: 2026-10-C1
+    approved_cohort: 2026-09-C1
     model_id: Inferact/Kimi-K3-DSpark
     weight_checksum: git-sha1:cf6b8244620e7ea4b0651d214f28e89eac75bed6
 
   # DeepSeek-V4.1-Flash: the native DSpark head in the approved checkpoint (endpoints#519).
   - benchmark: deepseek-v4_1-flash
-    approved_cohort: 2026-10-C1
+    approved_cohort: 2026-09-C1
     model_id: deepseek-ai/DeepSeek-V4.1-Flash
     weight_checksum: git-sha1:dba1be0a40aa45a94ad051997016db3960a90277
 
   # Qwen3.6-35B-A3B: the native MTP heads in each approved checkpoint (endpoints#494).
   - benchmark: qwen3_6-35b-a3b
-    approved_cohort: 2026-10-C1
+    approved_cohort: 2026-09-C1
     model_id: Qwen/Qwen3.6-35B-A3B
     weight_checksum: git-sha1:995ad96eacd98c81ed38be0c5b274b04031597b0
   - benchmark: qwen3_6-35b-a3b
-    approved_cohort: 2026-10-C1
+    approved_cohort: 2026-09-C1
     model_id: Qwen/Qwen3.6-35B-A3B-FP8
     weight_checksum: git-sha1:95a723d08a9490559dae23d0cff1d9466213d989
   - benchmark: qwen3_6-35b-a3b
-    approved_cohort: 2026-10-C1
+    approved_cohort: 2026-09-C1
     model_id: nvidia/Qwen3.6-35B-A3B-NVFP4
     weight_checksum: git-sha1:1355db6a052410cfd62085d94b58866fd0f2c3c5
