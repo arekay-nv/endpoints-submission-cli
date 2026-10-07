@@ -73,7 +73,13 @@ class ModelContext(BaseModel):
     _check_results: list[CheckResult] = PrivateAttr(default_factory=list)
 
     system_id: str
-    system_desc: SystemDescription
+    #: ``None`` when the curve's ``system_desc.json`` did not validate. The curve is
+    #: still checked; only the rules that compare against ``C_max`` need it, and they
+    #: fall back to :attr:`raw_c_max`.
+    system_desc: SystemDescription | None
+    #: ``max_supported_concurrency`` read from the raw JSON when :attr:`system_desc`
+    #: is ``None`` but that one field was still readable.
+    raw_c_max: int | None = None
     model_dir: Path
     #: ``None`` when no point parsed, so no ``C_min`` basis exists (§5.4).
     regions: Regions | None
@@ -82,8 +88,25 @@ class ModelContext(BaseModel):
     all_point_count: int
     valid_points: list[tuple[Path, PointConfig]]
     loaded_points: list[tuple[PointConfig, PointSummary]]
+    #: Concurrencies of points that exist but whose ``point.yaml`` is missing or did
+    #: not validate. They count toward coverage: the point is there, and its own
+    #: error is reported once by the loader. Leaving it out would report the region
+    #: it covers as empty as well.
+    unparsed_concurrencies: list[int] = Field(default_factory=list)
     #: Accuracy results keyed by the concurrency of the point carrying them (§5.3).
     accuracy_by_point: dict[int, AccuracyResult] = Field(default_factory=dict)
+
+    @property
+    def c_max(self) -> int | None:
+        """``C_max`` from the validated description, or the raw fallback, or ``None``."""
+        if self.system_desc is not None:
+            return self.system_desc.max_supported_concurrency
+        return self.raw_c_max
+
+    @property
+    def _present_concurrencies(self) -> list[int]:
+        """Every point's concurrency, parsed or not — what coverage is judged on."""
+        return [c.concurrency for _, c in self.valid_points] + self.unparsed_concurrencies
 
     @property
     def offline_points(self) -> list[tuple[Path, PointConfig]]:
@@ -266,8 +289,8 @@ class ModelContext(BaseModel):
 
         _path, config = declared[0]
         if config.offline == OFFLINE_ELECTED:
-            c_max = self.system_desc.max_supported_concurrency
-            if config.concurrency != c_max:
+            c_max = self.c_max
+            if c_max is not None and config.concurrency != c_max:
                 self._check_results.append(
                     err(
                         "offline-point-present",
@@ -310,7 +333,9 @@ class ModelContext(BaseModel):
             config.concurrency: summary.system_tps for config, summary in self.loaded_points
         }
         offline_tps = tps_by_concurrency.get(offline_config.concurrency)
-        c_max = self.system_desc.max_supported_concurrency
+        c_max = self.c_max
+        if c_max is None:
+            return self  # no C_max to compare against; system-description-valid says why
         c_max_tps = tps_by_concurrency.get(c_max)
 
         if offline_config.concurrency < c_max:
@@ -357,7 +382,7 @@ class ModelContext(BaseModel):
         ``1–C_min`` and always contains that point — testing it would be vacuous. The
         real requirement is that the curve reaches down into the band at all.
         """
-        concurrencies = [config.concurrency for _, config in self.valid_points]
+        concurrencies = self._present_concurrencies
         ultra_low = [c for c in concurrencies if c <= ULTRA_LOW_CONCURRENCY_MAX]
         if ultra_low:
             self._check_results.append(
@@ -394,10 +419,10 @@ class ModelContext(BaseModel):
             return self  # no C_min basis; region-basis already reported it
         r = self.regions
         attributed: dict[str, list[int]] = {}
-        for _, config in self.valid_points:
-            region = covered_region(config.concurrency, r)
+        for concurrency in self._present_concurrencies:
+            region = covered_region(concurrency, r)
             if region is not None:
-                attributed.setdefault(region, []).append(config.concurrency)
+                attributed.setdefault(region, []).append(concurrency)
 
         coverage_checks = [
             ("low-concurrency-coverage", "Low Concurrency", "low_concurrency", r.low_concurrency),
@@ -561,16 +586,16 @@ class ModelContext(BaseModel):
         curve has none of. The pass message names the applicable N so a reviewer can
         see which reading was applied.
         """
-        if self.regions is None or not self.valid_points:
+        if self.regions is None or not self._present_concurrencies:
             return self
 
         covered: set[str] = set()
-        for _path, config in self.valid_points:
-            if config.concurrency not in self.accuracy_by_point:
+        for concurrency in self._present_concurrencies:
+            if concurrency not in self.accuracy_by_point:
                 continue
-            if config.concurrency <= ULTRA_LOW_CONCURRENCY_MAX:
+            if concurrency <= ULTRA_LOW_CONCURRENCY_MAX:
                 covered.add("ultra_low_concurrency")
-            band = covered_region(config.concurrency, self.regions)
+            band = covered_region(concurrency, self.regions)
             if band is not None and band != "low_latency":
                 covered.add(band)
 

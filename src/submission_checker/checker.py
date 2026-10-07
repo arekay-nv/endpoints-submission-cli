@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+import yaml
+
 __all__ = ["SubmissionChecker"]
 
 from . import layout
@@ -144,6 +146,22 @@ class _LoadedPoint:
 
 
 @dataclass
+class _UnparsedPoint:
+    """A Pareto point whose ``point.yaml`` is missing or did not validate.
+
+    It is still a point: it counts toward ``C_min`` and coverage, and its other files
+    are still checked, so one bad field does not hide the rest of the point or shift
+    the curve's region boundaries. ``concurrency`` comes from the raw YAML when that
+    field is readable, else from the ``r<N>`` directory name, which
+    ``point-dirname-concurrency`` already requires to agree with it.
+    """
+
+    point_dir: Path
+    yaml_path: Path
+    concurrency: int | None
+
+
+@dataclass
 class _SystemFacts:
     """What the power descriptor is checked against from §8.2's system description.
 
@@ -176,6 +194,29 @@ def _read_json(path: Path) -> dict[str, object] | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _positive_int(value: object) -> int | None:
+    """*value* if it is a positive integer (and not a bool), else ``None``."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _fallback_concurrency(yaml_path: Path, point_dir: Path) -> int | None:
+    """A point's concurrency without a valid ``point.yaml``: raw field, else ``r<N>``."""
+    try:
+        data = yaml.safe_load(yaml_path.read_text())
+    except (OSError, yaml.YAMLError):
+        data = None
+    raw = _positive_int(data.get("concurrency")) if isinstance(data, dict) else None
+    return raw if raw is not None else layout.parse_point_dir(point_dir.name)
+
+
+def _raw_max_concurrency(sd_path: Path | None) -> int | None:
+    """``max_supported_concurrency`` from a ``system_desc.json`` that failed validation."""
+    data = _read_json(sd_path) if sd_path is not None else None
+    return _positive_int(data.get("max_supported_concurrency")) if data else None
 
 
 def _as_float(value: object) -> float | None:
@@ -345,10 +386,16 @@ class SubmissionChecker:
 
         submission_dir = SubmissionDir(root=self.submission_path)
         report.results.extend(submission_dir._check_results)
-        if any(r.severity == Severity.ERROR for r in submission_dir._check_results):
-            return report
 
+        # src/ is shared by the whole submission (§2.2.1), so it is checked once here
+        # rather than per curve, and whatever else is missing.
+        report.results.extend(SrcDir(root=self.submission_path)._check_results)
+
+        # Only a missing results/ leaves nothing further to check. A missing docs/
+        # is reported above and must not hide every result check behind it.
         results_dir = submission_dir.results_dir
+        if not results_dir.is_dir():
+            return report
 
         # Since policies PR #119 there is no per-system file: a system is simply a
         # directory under results/, and its description lives in every point's
@@ -687,9 +734,6 @@ class SubmissionChecker:
         results: list[CheckResult] = []
         benchmark_model = model_dir.name
 
-        src = SrcDir(root=self.submission_path)
-        results.extend(src._check_results)
-
         model_structure = ModelDir(
             root=model_dir, system_id=system_id, benchmark_model=benchmark_model
         )
@@ -700,21 +744,26 @@ class SubmissionChecker:
         point_dirs = model_structure.point_dirs
 
         # ── Phase 1: parse every point.yaml, with no region context ───────────
-        loaded, load_results = self._load_point_configs(point_dirs)
+        loaded, unparsed, load_results = self._load_point_configs(point_dirs)
         results.extend(load_results)
         if not loaded and not point_dirs:
             return results
 
+        # An invalid system description is reported, not fatal: the curve's other
+        # checks do not depend on it, and C_max can still come from the raw field.
         system_desc, sd_path, sd_results = self._load_curve_system_desc(point_dirs, model_dir)
         results.extend(sd_results)
-        if system_desc is None or sd_path is None:
-            return results
+        c_max = (
+            system_desc.max_supported_concurrency
+            if system_desc is not None
+            else _raw_max_concurrency(sd_path)
+        )
 
         results.extend(self._check_model_name(loaded))
 
         # ── Phase 1b: derive C_min, then the region boundaries ────────────────
         regions, region_results = self._derive_regions(
-            system_desc, loaded, len(point_dirs), model_dir, sd_path
+            c_max, loaded, unparsed, len(point_dirs), model_dir, sd_path
         )
         results.extend(region_results)
 
@@ -724,6 +773,8 @@ class SubmissionChecker:
 
         for point in loaded:
             results.extend(self._check_point(point, regions, loaded_points, power))
+        for unparsed_point in unparsed:
+            results.extend(self._check_unparsed_point(unparsed_point))
 
         results.extend(self._check_shared_paths(loaded))
 
@@ -748,13 +799,17 @@ class SubmissionChecker:
             )
             results.extend(drafter_binding._check_results)
 
-        accuracy_by_point, accuracy_dir, accuracy_results = self._load_curve_accuracy(loaded)
+        present = [(p.point_dir, p.config.concurrency) for p in loaded] + [
+            (u.point_dir, u.concurrency) for u in unparsed if u.concurrency is not None
+        ]
+        accuracy_by_point, accuracy_dir, accuracy_results = self._load_curve_accuracy(present)
         results.extend(accuracy_results)
 
         # ModelContext validates point-count, coverage, config-consistency, accuracy-gate
         model_ctx = ModelContext(
             system_id=system_id,
             system_desc=system_desc,
+            raw_c_max=c_max if system_desc is None else None,
             model_dir=model_dir,
             regions=regions,
             points_dir=model_dir,
@@ -762,6 +817,7 @@ class SubmissionChecker:
             all_point_count=len(point_dirs),
             valid_points=valid_points,
             loaded_points=loaded_points,
+            unparsed_concurrencies=[u.concurrency for u in unparsed if u.concurrency is not None],
             accuracy_by_point=accuracy_by_point,
         )
         results.extend(model_ctx._check_results)
@@ -774,10 +830,15 @@ class SubmissionChecker:
 
     def _load_point_configs(
         self, point_dirs: list[Path]
-    ) -> tuple[list[_LoadedPoint], list[CheckResult]]:
-        """Parse each point directory's ``point.yaml``; region rules run later."""
+    ) -> tuple[list[_LoadedPoint], list[_UnparsedPoint], list[CheckResult]]:
+        """Parse each point directory's ``point.yaml``; region rules run later.
+
+        A point whose ``point.yaml`` is missing or invalid is returned as an
+        :class:`_UnparsedPoint` rather than dropped, so it still counts.
+        """
         results: list[CheckResult] = []
         loaded: list[_LoadedPoint] = []
+        unparsed: list[_UnparsedPoint] = []
 
         for point_dir in point_dirs:
             yaml_path = point_dir / layout.POINT_YAML
@@ -791,11 +852,16 @@ class SubmissionChecker:
                         "#1",
                     )
                 )
+                unparsed.append(
+                    _UnparsedPoint(point_dir, yaml_path, layout.parse_point_dir(point_dir.name))
+                )
                 continue
 
             config, config_results = load_point_config(yaml_path, context={"yaml_path": yaml_path})
             results.extend(config_results)
             if config is None:
+                concurrency = _fallback_concurrency(yaml_path, point_dir)
+                unparsed.append(_UnparsedPoint(point_dir, yaml_path, concurrency))
                 continue
 
             # ModelDir.point_dirs only yields names matching r<digits>, so this parses.
@@ -823,7 +889,7 @@ class SubmissionChecker:
                     "#1",
                 )
             )
-        return loaded, results
+        return loaded, unparsed, results
 
     def _load_curve_system_desc(
         self, point_dirs: list[Path], model_dir: Path
@@ -929,48 +995,74 @@ class SubmissionChecker:
 
     def _derive_regions(
         self,
-        system_desc: SystemDescription,
+        c_max: int | None,
         loaded: list[_LoadedPoint],
+        unparsed: list[_UnparsedPoint],
         point_dir_count: int,
         model_dir: Path,
-        sd_path: Path,
+        sd_path: Path | None,
     ) -> tuple[Regions | None, list[CheckResult]]:
         """Compute the curve's region boundaries from ``C_max`` and a derived ``C_min``.
 
-        Only points whose ``point.yaml`` parsed contribute to ``C_min``: a corrupt file
-        has no trustworthy concurrency, and letting it set the floor would move every
-        boundary and cascade spurious failures onto the points that are fine.
+        Every point contributes to ``C_min``, including one whose ``point.yaml`` did
+        not validate (its concurrency comes from the raw field or ``r<N>``). Leaving
+        such a point out moves the floor, and with it every boundary, so a single bad
+        field elsewhere in the file used to report regions as uncovered that are not.
         """
         results: list[CheckResult] = []
-        c_max = system_desc.max_supported_concurrency
+        if c_max is None:
+            results.append(
+                _warn(
+                    "region-basis",
+                    "max_supported_concurrency could not be read from"
+                    f" {layout.SYSTEM_DESC_JSON}, so C_max is unknown and the"
+                    " region-dependent checks were not run for this curve",
+                    sd_path or model_dir,
+                    "#5.4",
+                )
+            )
+            return None, results
         results.append(
-            _ok("max-concurrency-declared", f"max_supported_concurrency = {c_max}", sd_path, "#7")
+            _ok(
+                "max-concurrency-declared",
+                f"max_supported_concurrency = {c_max}",
+                sd_path or model_dir,
+                "#7",
+            )
         )
 
-        if not loaded:
+        borrowed = [u.concurrency for u in unparsed if u.concurrency is not None]
+        concurrencies = [point.config.concurrency for point in loaded] + borrowed
+        if not concurrencies:
             results.append(
                 _err(
                     "region-basis",
-                    f"No {layout.POINT_YAML} parsed — C_min cannot be derived, so no"
-                    " region-dependent check can run for this curve",
+                    "No point's concurrency could be read — C_min cannot be derived, so"
+                    " no region-dependent check can run for this curve",
                     model_dir,
                     "#5.4",
                 )
             )
             return None, results
 
-        lowest = min(point.config.concurrency for point in loaded)
+        lowest = min(concurrencies)
         # A curve with no Ultra Low Concurrency point still gets usable boundaries;
         # ModelContext reports the missing coverage as its own error.
         c_min = min(lowest, ULTRA_LOW_CONCURRENCY_MAX)
         clamped = "" if c_min == lowest else f" (clamped from {lowest})"
+        note = (
+            f"; {len(borrowed)} from a {layout.POINT_YAML} that did not validate,"
+            " read from its raw concurrency or r<N> name"
+            if borrowed
+            else ""
+        )
 
-        if len(loaded) < point_dir_count:
+        if len(concurrencies) < point_dir_count:
             results.append(
                 _warn(
                     "region-basis",
-                    f"C_min = {c_min}{clamped} derived from {len(loaded)} of"
-                    f" {point_dir_count} points — the rest could not be parsed",
+                    f"C_min = {c_min}{clamped} derived from {len(concurrencies)} of"
+                    f" {point_dir_count} points{note} — the rest have no readable concurrency",
                     model_dir,
                     "#5.4",
                 )
@@ -979,7 +1071,7 @@ class SubmissionChecker:
             results.append(
                 _ok(
                     "region-basis",
-                    f"C_min = {c_min}{clamped} derived from all {point_dir_count} points",
+                    f"C_min = {c_min}{clamped} derived from all {point_dir_count} points{note}",
                     model_dir,
                     "#5.4",
                 )
@@ -988,7 +1080,7 @@ class SubmissionChecker:
         try:
             regions = compute_regions(c_max, c_min)
         except ValueError as exc:
-            results.append(_err("region-computation", str(exc), sd_path, "#5.5"))
+            results.append(_err("region-computation", str(exc), sd_path or model_dir, "#5.5"))
             return None, results
         return regions, results
 
@@ -1054,8 +1146,43 @@ class SubmissionChecker:
             results.extend(point_power._check_results)
         return results
 
+    def _check_unparsed_point(self, point: _UnparsedPoint) -> list[CheckResult]:
+        """Check what can be checked for a point whose ``point.yaml`` is unusable.
+
+        Its result summary does not depend on ``point.yaml``, so it is loaded and
+        validated as for any point. The rules that need the parsed config (region
+        placement, metric consistency, power) cannot run, and the warning says so,
+        so the submitter knows fixing the file may surface more.
+        """
+        results: list[CheckResult] = []
+        summary_path = point.point_dir / layout.RESULT_SUMMARY_JSON
+        if not summary_path.exists():
+            results.append(
+                _err(
+                    "result-summary-present",
+                    f"Missing {layout.RESULT_SUMMARY_JSON} for {point.point_dir.name}:"
+                    f" {summary_path.relative_to(self.submission_path)}",
+                    summary_path,
+                    "#1",
+                )
+            )
+        else:
+            _summary, load_results = load_result_summary(summary_path)
+            results.extend(load_results)
+        results.append(
+            _warn(
+                "point-rules-skipped",
+                f"{point.point_dir.name}/: {layout.POINT_YAML} is missing or invalid, so the"
+                " rules that read it (region placement, metric consistency, power) were not"
+                " run for this point; fixing it may report more",
+                point.yaml_path,
+                "#1",
+            )
+        )
+        return results
+
     def _load_curve_accuracy(
-        self, loaded: list[_LoadedPoint]
+        self, points: list[tuple[Path, int]]
     ) -> tuple[dict[int, AccuracyResult], Path | None, list[CheckResult]]:
         """Load accuracy results for **every** point that carries them.
 
@@ -1066,6 +1193,10 @@ class SubmissionChecker:
         mandatory concurrency points plus the Offline point — so the first usable
         result no longer stands in for the curve and each point is loaded on its own.
 
+        Args:
+            points: ``(point directory, concurrency)`` for every point of the curve,
+                including those whose ``point.yaml`` did not validate.
+
         Returns:
             ``(results keyed by concurrency, a directory for messages, check results)``.
         """
@@ -1073,8 +1204,7 @@ class SubmissionChecker:
         by_concurrency: dict[int, AccuracyResult] = {}
         first_dir: Path | None = None
 
-        for point in loaded:
-            point_dir = point.point_dir
+        for point_dir, concurrency in points:
             acc: AccuracyResult | None = None
 
             accuracy_json = point_dir / layout.ACCURACY_RESULTS_JSON
@@ -1095,7 +1225,7 @@ class SubmissionChecker:
                         acc = None
 
             if acc is not None:
-                by_concurrency[point.config.concurrency] = acc
+                by_concurrency[concurrency] = acc
                 if first_dir is None:
                     first_dir = point_dir
 
@@ -1155,32 +1285,43 @@ class SubmissionChecker:
         The pointers are how a point names the shared trees §8.1 places outside
         ``results/``. A value that does not resolve leaves the point's implementation
         and documentation unreviewable, which §9.1 answers with "Reject submission".
+
+        Reported per distinct value rather than per point, like ``model-name-valid``:
+        every point normally names the same tree, so a missing ``docs/`` would
+        otherwise be one cause reported once per point.
         """
-        results: list[CheckResult] = []
+        groups: dict[tuple[str, str], list[_LoadedPoint]] = {}
         for point in loaded:
             for field_name in ("shared_src", "shared_docs"):
                 value = getattr(point.config, field_name)
                 if value is None:
                     continue  # absence is reported by point-disclosure-complete
-                resolved = layout.resolve_shared_path(self.submission_path, value)
-                if resolved is None:
-                    results.append(
-                        _err(
-                            "shared-path-resolution",
-                            f"{field_name} {value!r} does not resolve to a directory under the"
-                            " submission root (paths must be root-relative and free of '..')",
-                            point.yaml_path,
-                            "#9.1",
-                        )
+                groups.setdefault((field_name, value), []).append(point)
+
+        results: list[CheckResult] = []
+        for (field_name, value), points in groups.items():
+            names = ", ".join(p.point_dir.name for p in points)
+            where = f"{len(points)} point(s): {names}"
+            resolved = layout.resolve_shared_path(self.submission_path, value)
+            if resolved is None:
+                results.append(
+                    _err(
+                        "shared-path-resolution",
+                        f"{field_name} {value!r} does not resolve to a directory under the"
+                        " submission root (paths must be root-relative and free of '..');"
+                        f" named by {where}",
+                        points[0].yaml_path,
+                        "#9.1",
                     )
-                else:
-                    results.append(
-                        _ok(
-                            "shared-path-resolution",
-                            f"{field_name} {value!r} resolves to"
-                            f" {resolved.relative_to(self.submission_path)}/",
-                            point.yaml_path,
-                            "#9.1",
-                        )
+                )
+            else:
+                results.append(
+                    _ok(
+                        "shared-path-resolution",
+                        f"{field_name} {value!r} resolves to"
+                        f" {resolved.relative_to(self.submission_path)}/ ({where})",
+                        points[0].yaml_path,
+                        "#9.1",
                     )
+                )
         return results

@@ -99,10 +99,11 @@ def test_full_basis_is_informational(valid_standardized: Path) -> None:
 class TestPartialAndAbsentBasis:
     """What happens when some — or none — of the points can be parsed.
 
-    A corrupt ``point.yaml`` has no trustworthy concurrency. Letting it set the floor
-    would move every boundary and cascade spurious ``concurrency-in-range`` failures
-    onto the points that are fine, so unparseable points are excluded from the basis
-    and the report says the basis was partial.
+    A point whose ``point.yaml`` does not parse still exists, so it still contributes
+    to the basis, with its concurrency read from the ``r<N>`` directory name (which
+    ``point-dirname-concurrency`` holds to the declared value). Excluding it instead
+    moves the floor, and with it every boundary, which reported regions as uncovered
+    that the submission does cover. The report says which points the basis borrowed.
     """
 
     def _corrupt(self, submission: Path, concurrency: int) -> None:
@@ -111,20 +112,22 @@ class TestPartialAndAbsentBasis:
             if path.exists():
                 path.write_text("{not: valid: yaml [")
 
-    def test_lowest_point_corrupt_derives_from_the_rest(
+    def test_lowest_point_corrupt_keeps_its_place_in_the_basis(
         self, valid_standardized: Path, tmp_path: Path
     ) -> None:
         import shutil
 
         root = tmp_path / "sub"
         shutil.copytree(valid_standardized, root)
-        self._corrupt(root, 16)  # next-lowest point is 20
+        self._corrupt(root, 16)  # excluding it would move C_min to the next point, 20
 
         report = _check(root)
         basis = _results(report, "region-basis")
-        assert basis and basis[0].severity == Severity.WARNING
-        assert "C_min = 20" in basis[0].message
-        assert "6 of 7 points" in basis[0].message
+        assert basis and basis[0].severity == Severity.INFO
+        assert "C_min = 16" in basis[0].message
+        assert "all 7 points; 1 from a point.yaml that did not validate" in basis[0].message
+        # The region r16 covers is still covered: no error caused by the corrupt file.
+        assert not _results(report, "low-concurrency-coverage", Severity.ERROR)
 
     def test_partial_basis_still_reports_the_corrupt_file(
         self, valid_standardized: Path, tmp_path: Path
@@ -149,12 +152,17 @@ class TestPartialAndAbsentBasis:
                 (point_dir / layout.POINT_YAML).write_text("{not: valid: yaml [")
 
         report = _check(root)
-        assert _results(report, "region-basis", Severity.ERROR)
+        # Every concurrency comes from its r<N> name, so the basis is still complete.
+        basis = _results(report, "region-basis")
+        assert basis and "7 from a point.yaml that did not validate" in basis[0].message
         # point-count does not depend on the regions, so it must still run.
         assert _results(report, "point-count")
-        # Region-dependent rules are skipped rather than reported against no basis.
+        # Per-point placement needs the parsed config, so it cannot run...
         assert not _results(report, "concurrency-in-range")
-        assert not _results(report, "low-concurrency-coverage")
+        # ...but coverage only needs concurrencies, and the curve does cover each region.
+        assert not _results(report, "low-concurrency-coverage", Severity.ERROR)
+        # Each point says its own rules were skipped, so fixing it may report more.
+        assert len(_results(report, "point-rules-skipped", Severity.WARNING)) == 7
 
     def test_no_basis_does_not_crash_the_coverage_rules(
         self, valid_standardized: Path, tmp_path: Path
